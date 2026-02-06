@@ -5,15 +5,14 @@ import * as XLSX from 'xlsx'
 /* columnas a ocultar (no afecta las proyecciones fijas de la tabla/export) */
 const EXCLUDED_COLUMNS = new Set([
   'status_externo', 'status_externo_at',
-  'caja','saco_id','ubicacion_id','ubicacion_tipo','estanteria',
-  // OJO: NO excluir 'mueble' para que esté disponible
+  'caja','saco_id','distrito_id','estanteria',
 ])
 
 const HEADERS_ES = {
   tracking_code: 'Numero de envio',
   tracking_intranet: 'Tracking Intranet',
   marchamo: 'Marchamo',
-  ubicacion_codigo: 'Ubicacion',
+  distrito_nombre: 'Distrito',
   estado: 'Estado',
   received_at: 'Recepcion',
   delivered_at: 'Entrega',
@@ -23,19 +22,18 @@ const HEADERS_ES = {
   recipient_address: 'Direccion',
   recipient_phone: 'Telefono',
   content_description: 'Descripcion',
-  // devolucion_subtipo: 'Subcategoría devolución',
 }
 
 /* ====== Definición de salida fija (UI) ====== */
 const FIXED_KEYS = [
-  'marchamo', 'mueble', 'tracking', 'nombre', 'descripcion',
+  'marchamo', 'distrito', 'tracking', 'nombre', 'descripcion',
   'estado', 'devolucion_subtipo',
   'telefono', 'direccion', 'fecha'
 ]
 
 /* ====== Definición de salida fija (Excel) → agrega Tracking Intranet ====== */
 const FIXED_KEYS_XLSX = [
-  'marchamo', 'mueble', 'tracking', 'tracking_intranet',
+  'marchamo', 'distrito', 'tracking', 'tracking_intranet',
   'nombre', 'descripcion',
   'estado', 'devolucion_subtipo',
   'telefono', 'direccion', 'fecha'
@@ -43,7 +41,7 @@ const FIXED_KEYS_XLSX = [
 
 const FIXED_HEADERS = {
   marchamo: 'Marchamo',
-  mueble: 'Mueble',
+  distrito: 'Distrito',
   tracking: 'Tracking',
   tracking_intranet: 'Tracking Intranet', // ← SOLO Excel
   nombre: 'Nombre',
@@ -71,16 +69,7 @@ const safeSheetName = (name) => {
   return cleaned.length <= 31 ? cleaned : cleaned.slice(0, 31)
 }
 
-const CR_TZ = 'America/Costa_Rica'
-const CR_OFFSET = '-06:00' // ✅ CR fijo (sin DST)
-
-/** Fecha YYYY-MM-DD → ISO con offset CR fijo */
-const toOffsetISO = (yyyyMmDd, hh = '00', mm = '00', ss = '00') => {
-  if (!yyyyMmDd) return null
-  return `${yyyyMmDd}T${hh}:${mm}:${ss}${CR_OFFSET}`
-}
-
-const esCR = { timeZone: CR_TZ }
+const esCR = { timeZone: 'America/Costa_Rica' }
 const fmtDMY = (val) => {
   if (!val) return '-'
   const d = new Date(val)
@@ -109,6 +98,16 @@ export default function Reportes() {
 
   // auto-consulta al cambiar modo/fecha(s)
   useEffect(() => { consultar() }, [mode, fecha, desde, hasta])
+
+  const toOffsetISO = (yyyyMmDd, hh = '00', mm = '00', ss = '00') => {
+    if (!yyyyMmDd) return null
+    const offMin = -new Date().getTimezoneOffset()
+    const sign = offMin >= 0 ? '+' : '-'
+    const abs = Math.abs(offMin)
+    const hhOff = String(Math.floor(abs / 60)).padStart(2, '0')
+    const mmOff = String(abs % 60).padStart(2, '0')
+    return `${yyyyMmDd}T${hh}:${mm}:${ss}${sign}${hhOff}:${mmOff}`
+  }
 
   const consultar = async () => {
     setLoading(true)
@@ -157,16 +156,22 @@ export default function Reportes() {
     setRecibidos([]); setEntregados([]); setDevoluciones([]); setPush([]); setAlmacenaje([])
   }
 
+  // ✅ Distrito viene desde la BD (vw_paquete_resumen.distrito_nombre)
+  const getDistrito = (r) =>
+    r?.distrito_nombre ?? r?.distritoNombre ?? r?.distrito ?? '-'
+
   // Proyección fija para tablas/export
   const projectRows = (rows, dateKey) => {
     return (rows || []).map(r => ({
       marchamo: r?.marchamo ?? '-',
-      mueble: r?.ubicacion_codigo ?? '-',
+      distrito: getDistrito(r),
       tracking: r?.tracking_code ?? '-',
       nombre: r?.recipient_name ?? '-',
       descripcion: r?.content_description ?? '-',
       estado: r?.estado ?? '-',
-      devolucion_subtipo: (r?.estado === 'DEVOLUCION') ? (r?.devolucion_subtipo ?? '-') : '-',
+      devolucion_subtipo: (r?.estado === 'DEVOLUCION' || r?.estado === 'NO_ENTREGABLE')
+        ? (r?.devolucion_subtipo ?? '-')
+        : '-',
       telefono: r?.recipient_phone ?? '-',
       direccion: r?.recipient_address ?? '-',
       fecha: fmtDMY(r?.[dateKey]),
@@ -255,7 +260,6 @@ export default function Reportes() {
       const BATCH = 1000
       const all = []
       for (let off = 0; off < total; off += BATCH) {
-        // eslint-disable-next-line no-await-in-loop
         const { data: resp } = await api.get('/busqueda/inventario', {
           params: { estado: 'EN_INVENTARIO', limit: BATCH, offset: off }
         })
@@ -319,7 +323,7 @@ export default function Reportes() {
           <button
             onClick={generarReporteInventario}
             disabled={loading || exportingInv}
-            title="Genera un Excel con todos los paquetes actualmente EN_INVENTARIO (ignora rango/fecha)"
+            title="Genera un Excel con todos los paquetes actualmente EN INVENTARIO (ignora rango/fecha)"
           >
             {exportingInv ? 'Generando…' : 'Generar reporte (De todo el inventario)'}
           </button>
@@ -341,13 +345,13 @@ export default function Reportes() {
           </label>
 
           <button onClick={generarReporte} disabled={loading || totalFilas() === 0}>
-            Generar reporte (Rango)
+            Generar reporte (Del día)
           </button>
 
           <button
             onClick={generarReporteInventario}
             disabled={loading || exportingInv}
-            title="Genera un Excel con todos los paquetes actualmente EN_INVENTARIO (ignora rango/fecha)"
+            title="Genera un Excel con todos los paquetes actualmente EN INVENTARIO (ignora rango/fecha)"
           >
             {exportingInv ? 'Generando…' : 'Generar reporte (De todo el inventario)'}
           </button>
@@ -426,15 +430,21 @@ function rangoLabel(desde, hasta){
   return ''
 }
 
+/* ===================== TABLA con las columnas fijas (sin Tracking Intranet) ===================== */
 function DataTable({ rows, dateKey }){
+  const getDistrito = (r) =>
+    r?.distrito_nombre ?? r?.distritoNombre ?? r?.distrito ?? '-'
+
   const data = (rows || []).map(r => ({
     marchamo: r?.marchamo ?? '-',
-    mueble: r?.ubicacion_codigo ?? '-',
+    distrito: getDistrito(r),
     tracking: r?.tracking_code ?? '-',
     nombre: r?.recipient_name ?? '-',
     descripcion: r?.content_description ?? '-',
     estado: r?.estado ?? '-',
-    devolucion_subtipo: (r?.estado === 'DEVOLUCION') ? (r?.devolucion_subtipo ?? '-') : '-',
+    devolucion_subtipo: (r?.estado === 'DEVOLUCION' || r?.estado === 'NO_ENTREGABLE')
+      ? (r?.devolucion_subtipo ?? '-')
+      : '-',
     telefono: r?.recipient_phone ?? '-',
     direccion: r?.recipient_address ?? '-',
     fecha: fmtDMY(r?.[dateKey]),
