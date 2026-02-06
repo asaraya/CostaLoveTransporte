@@ -30,23 +30,7 @@ public class SacoController {
         this.sacos = sacos;
         this.registro = registro;
     }
-
-    @Transactional
-    public Saco crearSaco(String marchamo, String defaultDistritoNombre) {
-        // Mantiene compatibilidad con el controller:
-        // - Crea el saco (idempotente)
-        // - Si mandan distrito por el body, al menos valida que exista
-        Saco s = crearSaco(marchamo);
-
-        if (defaultDistritoNombre != null && !defaultDistritoNombre.isBlank()) {
-            String d = defaultDistritoNombre.trim();
-            distritos.findByNombre(d)
-                .orElseThrow(() -> new IllegalArgumentException("El distrito no existe: " + d));
-        }
-
-        return s;
-    }
-
+    
 
     // =======================
     // Crear Saco (idempotente)
