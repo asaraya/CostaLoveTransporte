@@ -20,7 +20,7 @@ import com.cargosfsr.inventario.auth.AuthInterceptor;
 public class WebConfig implements WebMvcConfigurer {
 
     private static final String FRONT_SANPABLO = "https://cargofsr-production.up.railway.app";
-    private static final String FRONT_GUAPILES = "https://costa-love-guapiles.up.railway.app";
+    private static final String FRONT_GUAPILES = "https://costalovetransporte-production.up.railway.app";
     private static final String FRONT_DEV      = "http://localhost:5173";
 
     @Bean

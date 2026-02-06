@@ -2,15 +2,15 @@ import { useEffect, useState } from 'react'
 import { api, toastErr } from '../api'
 import * as XLSX from 'xlsx'
 
-/* columnas a ocultar para la tabla (no se usan porque tenemos FIXED_COLUMNS; quedan por compat) */
+/* columnas a ocultar (compat) */
 const EXCLUDED_COLUMNS = new Set([
   'id',
   'status_externo', 'status_externo_at',
-  'saco_id', 'ubicacion_id', 'ubicacion_tipo',
-  'mueble', 'estanteria', 'caja'
+  'saco_id',
+  'distrito_id',
 ])
 
-/* === COLUMNA FIJA Y ORDEN CONSISTENTE PARA TODAS LAS VISTAS === */
+/* === COLUMNA FIJA Y ORDEN CONSISTENTE === */
 const FIXED_COLUMNS = [
   'marchamo',
   'tracking_code',
@@ -19,16 +19,16 @@ const FIXED_COLUMNS = [
   'recipient_address',
   'estado',
   'devolucion_subtipo',
-  'ubicacion_codigo',
+  'distrito_nombre',
   'received_at',
   'delivered_at',
   'returned_at',
   'last_state_change_at',
   'merchandise_value',
   'content_description',
-  'observaciones',             // <-- NUEVA COLUMNA
+  'observaciones',
   'cambio_en_sistema_por',
-  'responsable_consolidado'
+  'responsable_consolidado',
 ]
 
 // Encabezados en español
@@ -39,17 +39,17 @@ const HEADERS_ES = {
   recipient_phone: 'Teléfono',
   recipient_address: 'Dirección',
   estado: 'Estado',
-  devolucion_subtipo: 'Subcategoría devolución',
-  ubicacion_codigo: 'Ubicación',
+  devolucion_subtipo: 'Subtipo devolución',
+  distrito_nombre: 'Distrito',
   received_at: 'Recepción',
   delivered_at: 'Entrega',
   returned_at: 'Devolución',
   last_state_change_at: 'Último cambio',
   merchandise_value: 'Valor (USD)',
   content_description: 'Contenido',
-  observaciones: 'Observaciones',                 // <-- NUEVO
+  observaciones: 'Observaciones',
   cambio_en_sistema_por: 'Último cambio por',
-  responsable_consolidado: 'Responsable (Excel)'
+  responsable_consolidado: 'Responsable (Excel)',
 }
 
 const SEARCH_TYPES = [
@@ -58,18 +58,16 @@ const SEARCH_TYPES = [
   { key: 'tracking',  label: 'Número de envío (tracking)' },
   { key: 'nombre',    label: 'Nombre destinatario' },
   { key: 'direccion', label: 'Dirección' },
-  { key: 'ubicacion', label: 'Ubicación' },
-  { key: 'vigencia',  label: 'Vigencia' }
+  { key: 'distrito',  label: 'Distrito' },
+  { key: 'vigencia',  label: 'Vigencia' },
 ]
 
-// Subfiltros para Devolución
+// Subfiltros para NO_ENTREGABLE
 const DEV_SUBS = [
-  { key: 'TODOS',       label: 'Todos' },
-  { key: 'ENRUTE',      label: 'Enrute' },
-  { key: 'OTRAS_ZONAS', label: 'Otras zonas' },
-  { key: 'VENCIDOS',    label: 'Vencidos' },
-  { key: 'NO_ENTREGAR', label: 'No entregar' },
-  { key: 'TRANSPORTE',  label: 'Transporte' },
+  { key: 'TODOS',        label: 'Todos' },
+  { key: 'FUERA_DE_RUTA',label: 'Fuera de ruta' },
+  { key: 'VENCIDOS',     label: 'Vencidos' },
+  { key: 'DOS_INTENTOS', label: '2 intentos' },
 ]
 
 /* Helper de TZ local (CR) para display */
@@ -161,63 +159,48 @@ function normalizeRow(r) {
     return s
   }
 
-  // exactos primero (rápido), y si no, búsqueda profunda
   const pick = (...keys) => asValue(deepPick(r, keys) ?? r[keys.find(k => r[k] != null)])
 
-  // === RESPONSABLE del consolidado (Excel) ===
+  // Responsable (Excel)
   const responsableExcel =
     asValue(
       deepPick(r, [
         'responsable_consolidado', 'responsableConsolidado',
         'responsable', 'responsable_excel', 'responsableExcel',
-        'responsable_control_bodega', 'responsableControlBodega',
-        'responsable_control', 'responsableControl',
-        'responsable_import', 'responsableImport',
-        'responsable_consolidado_nombre', 'responsableConsolidadoNombre',
-        'responsable_nombre', 'responsableNombre',
-        'responsable_archivo', 'responsableArchivo',
-        'responsable_xls', 'responsableXls',
-        'responsable_xlsx', 'responsableXlsx'
-      ])
-      ?? deepPickRe(r, /responsab/i)
+      ]) ?? deepPickRe(r, /responsab/i)
     )
 
-  // === “Último cambio por” ===
+  // Último cambio por
   const changedBy =
     asValue(
       deepPick(r, [
         'cambio_en_sistema_por', 'cambioEnSistemaPor',
+        'ultimo_cambio_por', 'ultimoCambioPor',
         'last_changed_by', 'lastChangedBy',
         'changed_by', 'changedBy',
-        'last_user', 'lastUser',
-        'usuario_cambio', 'usuarioCambio',
-        'usuario_ult_cambio', 'usuarioUltCambio',
-        'modificado_por', 'modificadoPor',
         'updated_by', 'updatedBy',
         'actor'
-      ])
-      ?? deepPickRe(r, /(cambio|changed|modific|update|usuario|last.*user)/i)
+      ]) ?? deepPickRe(r, /(cambio|changed|modific|update|usuario|actor|ultimo)/i)
     )
 
   return {
-    marchamo:            asValue(pick('marchamo')),
-    tracking_code:       asValue(pick('tracking_code', 'trackingCode')),
-    recipient_name:      asValue(pick('recipient_name', 'recipientName')),
-    recipient_phone:     asValue(pick('recipient_phone', 'recipientPhone')),
-    recipient_address:   asValue(pick('recipient_address', 'recipientAddress')),
-    estado:              asValue(pick('estado')),
-    devolucion_subtipo:  asValue(pick('devolucion_subtipo', 'devolucionSubtipo')),
-    ubicacion_codigo:    asValue(pick('ubicacion_codigo', 'ubicacionCodigo')),
-    received_at:         asValue(pick('received_at', 'receivedAt')),
-    delivered_at:        asValue(pick('delivered_at', 'deliveredAt')),
-    returned_at:         asValue(pick('returned_at', 'returnedAt')),
-    last_state_change_at:asValue(pick('last_state_change_at', 'lastStateChangeAt')),
-    merchandise_value:   asValue(pick('merchandise_value', 'merchandiseValue')),
-    content_description: asValue(pick('content_description', 'contentDescription')),
-    observaciones:       asValue(pick('observaciones')),                 // <-- NUEVO
-
+    marchamo:              asValue(pick('marchamo')),
+    tracking_code:         asValue(pick('tracking_code', 'trackingCode')),
+    recipient_name:        asValue(pick('recipient_name', 'recipientName')),
+    recipient_phone:       asValue(pick('recipient_phone', 'recipientPhone')),
+    recipient_address:     asValue(pick('recipient_address', 'recipientAddress')),
+    estado:                asValue(pick('estado')),
+    devolucion_subtipo:    asValue(pick('devolucion_subtipo', 'devolucionSubtipo')),
+    distrito_nombre:       asValue(pick('distrito_nombre', 'distritoNombre')),
+    received_at:           asValue(pick('received_at', 'receivedAt')),
+    delivered_at:          asValue(pick('delivered_at', 'deliveredAt')),
+    returned_at:           asValue(pick('returned_at', 'returnedAt')),
+    last_state_change_at:  asValue(pick('last_state_change_at', 'lastStateChangeAt')),
+    merchandise_value:     asValue(pick('merchandise_value', 'merchandiseValue')),
+    content_description:   asValue(pick('content_description', 'contentDescription')),
+    observaciones:         asValue(pick('observaciones')),
     cambio_en_sistema_por: changedBy,
-    responsable_consolidado: responsableExcel
+    responsable_consolidado: responsableExcel,
   }
 }
 
@@ -230,33 +213,27 @@ export default function Inventario() {
   const [searchType, setSearchType] = useState('todos')
   const [query, setQuery] = useState('')
   const [rows, setRows] = useState([])
-  const [columns, setColumns] = useState(FIXED_COLUMNS) // siempre fijo
+  const [columns, setColumns] = useState(FIXED_COLUMNS)
   const [loading, setLoading] = useState(false)
-
-  // NUEVO: estado de exportación inventario
-  const [exporting, setExporting] = useState(false)
 
   // Paginación simple
   const [pageSize, setPageSize] = useState(20)
   const [offset, setOffset] = useState(0)
 
   // Estado para "Todos"
-  // EN_INVENTARIO | ENTREGADO | PUSH | ALMACENAJE | DEVOLUCION | TODOS
-  const [estadoTodos, setEstadoTodos] = useState('EN_INVENTARIO')
+  const [estadoTodos, setEstadoTodos] = useState('NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE')
 
-  // Subfiltro Devolución
+  // Subfiltro devolución
   const [devSub, setDevSub] = useState('TODOS')
 
   // Total global
   const [totalCount, setTotalCount] = useState(0)
 
-  // Cargar por primera vez
   useEffect(() => {
     if (searchType === 'todos') buscar(0, { searchType: 'todos', estadoTodos, devSub })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ===== Buscar y Count usando overrides para evitar "lag" =====
   const fetchTotalCount = async (overrides = {}) => {
     try {
       const effSearchType = overrides.searchType ?? searchType
@@ -265,11 +242,13 @@ export default function Inventario() {
       const q             = overrides.query ?? query
 
       let total = 0
+
       if (effSearchType === 'todos') {
-        if (effEstado === 'DEVOLUCION') {
+        // Para NO_ENTREGABLE con subtipo usamos reportes/devolucion (para contar bien)
+        if (effEstado === 'NO_ENTREGABLE') {
           const params = {}
           if (effDevSub !== 'TODOS') params.subtipo = effDevSub
-          const { data: resp } = await api.get('/paquetes/devolucion', { params })
+          const { data: resp } = await api.get('/reportes/devolucion', { params })
           total = Array.isArray(resp) ? resp.length : 0
         } else {
           const params = { estado: effEstado }
@@ -300,10 +279,10 @@ export default function Inventario() {
           const { data } = await api.get('/busqueda/direccion/count', { params: { q, like: 1 } })
           total = data?.total ?? 0
         }
-      } else if (effSearchType === 'ubicacion') {
+      } else if (effSearchType === 'distrito') {
         if (!q.trim()) total = 0
         else {
-          const { data } = await api.get(`/busqueda/ubicacion/${encodeURIComponent(q)}/count`)
+          const { data } = await api.get(`/busqueda/distrito/${encodeURIComponent(q)}/count`)
           total = data?.total ?? 0
         }
       } else if (effSearchType === 'vigencia') {
@@ -317,6 +296,7 @@ export default function Inventario() {
           total = data?.total ?? 0
         }
       }
+
       setTotalCount(total)
     } catch {
       setTotalCount(0)
@@ -331,18 +311,17 @@ export default function Inventario() {
       const effEstado     = overrides.estadoTodos ?? estadoTodos
       const effDevSub     = overrides.devSub ?? devSub
       const effQuery      = overrides.query ?? query
-
       const off = typeof customOffset === 'number' ? customOffset : (overrides.offset ?? offset)
 
       let data = []
 
       if (effSearchType === 'todos') {
-        if (effEstado === 'DEVOLUCION') {
+        // NO_ENTREGABLE con subtipo: usamos /reportes/devolucion y paginamos en cliente
+        if (effEstado === 'NO_ENTREGABLE') {
           const params = {}
           if (effDevSub !== 'TODOS') params.subtipo = effDevSub
-          const { data: resp } = await api.get('/paquetes/devolucion', { params })
+          const { data: resp } = await api.get('/reportes/devolucion', { params })
           const normalized = normalizeRows(resp)
-          // paginación en cliente para este caso
           data = normalized.slice(off, off + pageSize)
         } else {
           const params = { estado: effEstado, limit: pageSize, offset: off }
@@ -361,8 +340,8 @@ export default function Inventario() {
       } else if (effSearchType === 'direccion') {
         const { data: resp } = await api.get('/busqueda/direccion', { params: { q: effQuery, like: 1 } })
         data = normalizeRows(resp)
-      } else if (effSearchType === 'ubicacion') {
-        const { data: resp } = await api.get(`/busqueda/ubicacion/${encodeURIComponent(effQuery || '')}`)
+      } else if (effSearchType === 'distrito') {
+        const { data: resp } = await api.get(`/busqueda/distrito/${encodeURIComponent(effQuery || '')}`)
         data = normalizeRows(resp)
       } else if (effSearchType === 'vigencia') {
         const parsed = parseVigenciaInput(effQuery)
@@ -378,7 +357,7 @@ export default function Inventario() {
       }
 
       setRows(Array.isArray(data) ? data : [])
-      setColumns(FIXED_COLUMNS) // columnas fijas y consistentes
+      setColumns(FIXED_COLUMNS)
       await fetchTotalCount({ searchType: effSearchType, estadoTodos: effEstado, devSub: effDevSub, query: effQuery })
     } catch (e) {
       toastErr(e)
@@ -392,27 +371,23 @@ export default function Inventario() {
     if (!Number.isFinite(n) || n <= 0) return
     setPageSize(n)
     setOffset(0)
-    if (searchType === 'todos') buscar(0, { searchType: 'todos', estadoTodos, devSub })
+    buscar(0)
   }
 
   const cargarMas = () => {
     const next = offset + pageSize
     setOffset(next)
-    buscar(next) // usa estado vigente
+    buscar(next)
   }
 
-  // Click en pestañas de tipo de búsqueda
   const handleSearchTypeClick = (key) => {
     const switching = key !== searchType
     setSearchType(key)
     setOffset(0)
-    if (switching) setQuery('') // <-- LIMPIAR INPUT al cambiar de filtro
-    if (key === 'todos') {
-      buscar(0, { searchType: 'todos', estadoTodos, devSub })
-    }
+    if (switching) setQuery('')
+    if (key === 'todos') buscar(0, { searchType: 'todos', estadoTodos, devSub })
   }
 
-  // Click en estado principal (todos)
   const handleEstadoClick = (estado) => {
     setEstadoTodos(estado)
     setDevSub('TODOS')
@@ -420,14 +395,12 @@ export default function Inventario() {
     buscar(0, { searchType: 'todos', estadoTodos: estado, devSub: 'TODOS' })
   }
 
-  // Click en subfiltro de devolución
   const handleDevSubClick = (sub) => {
     setDevSub(sub)
     setOffset(0)
-    buscar(0, { searchType: 'todos', estadoTodos: 'DEVOLUCION', devSub: sub })
+    buscar(0, { searchType: 'todos', estadoTodos: 'NO_ENTREGABLE', devSub: sub })
   }
 
-  // Enter para ejecutar búsqueda en modos distintos a "todos"
   const onEnter = (e) => {
     if (e.key === 'Enter') {
       setOffset(0)
@@ -435,7 +408,7 @@ export default function Inventario() {
     }
   }
 
-  /* === Exportar por marchamo (usa filas mostradas) === */
+  /* Exportar por marchamo (usa filas mostradas) */
   const generarReporteMarchamo = () => {
     const marchamo = (query || '').trim()
     if (searchType !== 'marchamo') return
@@ -444,13 +417,14 @@ export default function Inventario() {
 
     const columns = FIXED_COLUMNS
     const headers = columns.map(c => prettyHeader(c))
+
     const data = rows.map(r => {
       const obj = {}
       columns.forEach(c => {
         let val = r[c]
-        if (c === 'devolucion_subtipo' && r['estado'] !== 'DEVOLUCION') val = '-'
+        if (c === 'devolucion_subtipo' && r['estado'] !== 'NO_ENTREGABLE') val = '-'
         if (['responsable_consolidado','cambio_en_sistema_por','observaciones'].includes(c)
-            && (val == null || String(val).trim() === '')) val = '-'   // <-- contemplar observaciones
+            && (val == null || String(val).trim() === '')) val = '-'
         obj[prettyHeader(c)] = fmtCell(val)
       })
       return obj
@@ -464,6 +438,9 @@ export default function Inventario() {
     const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')
     XLSX.writeFile(wb, `reporte_marchamo_${sanitize(marchamo)}_${stamp}.xlsx`, { compression: true })
   }
+
+  // ¿Hay más páginas?
+  const hasMore = (offset + pageSize) < totalCount
 
   return (
     <div className="page">
@@ -482,7 +459,6 @@ export default function Inventario() {
           </button>
         ))}
 
-        {/* Cantidad a mostrar (solo afecta 'Todos' y 'Vigencia') */}
         <div style={{ display:'flex', gap:8, alignItems:'center', marginLeft:8 }}>
           <label>Cantidad a mostrar:</label>
           <input
@@ -491,7 +467,7 @@ export default function Inventario() {
             value={pageSize}
             onChange={e => onChangePageSize(e.target.value)}
             style={{ width: 90, padding: 6, border: '1px solid #163E7A', borderRadius: 8 }}
-            title="Cantidad de paquetes a listar (solo para 'Todos' y 'Vigencia')"
+            title="Cantidad de paquetes a listar"
           />
         </div>
 
@@ -507,43 +483,35 @@ export default function Inventario() {
             <label>Estado a listar:</label>
 
             <button
-              className={`toggle ${estadoTodos === 'EN_INVENTARIO' ? 'is-selected' : ''}`}
-              aria-pressed={estadoTodos === 'EN_INVENTARIO'}
-              onClick={() => handleEstadoClick('EN_INVENTARIO')}
+              className={`toggle ${estadoTodos === 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' ? 'is-selected' : ''}`}
+              aria-pressed={estadoTodos === 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'}
+              onClick={() => handleEstadoClick('NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE')}
             >
-              En inventario
+              Disponible
             </button>
 
             <button
-              className={`toggle ${estadoTodos === 'ENTREGADO' ? 'is-selected' : ''}`}
-              aria-pressed={estadoTodos === 'ENTREGADO'}
-              onClick={() => handleEstadoClick('ENTREGADO')}
+              className={`toggle ${estadoTodos === 'ENTREGADO_A_TRANSPORTISTA_LOCAL' ? 'is-selected' : ''}`}
+              aria-pressed={estadoTodos === 'ENTREGADO_A_TRANSPORTISTA_LOCAL'}
+              onClick={() => handleEstadoClick('ENTREGADO_A_TRANSPORTISTA_LOCAL')}
             >
-              Prueba de entrega (Entregado)
+              Entregado a transportista
             </button>
 
             <button
-              className={`toggle ${estadoTodos === 'PUSH' ? 'is-selected' : ''}`}
-              aria-pressed={estadoTodos === 'PUSH'}
-              onClick={() => handleEstadoClick('PUSH')}
+              className={`toggle ${estadoTodos === 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO' ? 'is-selected' : ''}`}
+              aria-pressed={estadoTodos === 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'}
+              onClick={() => handleEstadoClick('ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')}
             >
-              Push
+              Entregado (2do intento)
             </button>
 
             <button
-              className={`toggle ${estadoTodos === 'ALMACENAJE' ? 'is-selected' : ''}`}
-              aria-pressed={estadoTodos === 'ALMACENAJE'}
-              onClick={() => handleEstadoClick('ALMACENAJE')}
+              className={`toggle ${estadoTodos === 'NO_ENTREGABLE' ? 'is-selected' : ''}`}
+              aria-pressed={estadoTodos === 'NO_ENTREGABLE'}
+              onClick={() => handleEstadoClick('NO_ENTREGABLE')}
             >
-              Almacenaje
-            </button>
-
-            <button
-              className={`toggle ${estadoTodos === 'DEVOLUCION' ? 'is-selected' : ''}`}
-              aria-pressed={estadoTodos === 'DEVOLUCION'}
-              onClick={() => handleEstadoClick('DEVOLUCION')}
-            >
-              En tránsito a bodegas Aeropost (Devolución)
+              No entregable (devolución)
             </button>
 
             <button
@@ -554,7 +522,7 @@ export default function Inventario() {
               Todos
             </button>
 
-            {estadoTodos === 'DEVOLUCION' && (
+            {estadoTodos === 'NO_ENTREGABLE' && (
               <div style={{ display:'flex', gap:8, alignItems:'center', marginLeft:8 }}>
                 <span style={{ opacity:.8 }}>Subfiltro:</span>
                 {DEV_SUBS.map(s => (
@@ -590,6 +558,7 @@ export default function Inventario() {
             </button>
           </>
         )}
+
         {searchType === 'tracking' && (
           <>
             <label>Tracking:</label>
@@ -601,6 +570,7 @@ export default function Inventario() {
             />
           </>
         )}
+
         {searchType === 'nombre' && (
           <>
             <label>Nombre:</label>
@@ -612,6 +582,7 @@ export default function Inventario() {
             />
           </>
         )}
+
         {searchType === 'direccion' && (
           <>
             <label>Dirección:</label>
@@ -623,17 +594,19 @@ export default function Inventario() {
             />
           </>
         )}
-        {searchType === 'ubicacion' && (
+
+        {searchType === 'distrito' && (
           <>
-            <label>Ubicación (código):</label>
+            <label>Distrito:</label>
             <input
               value={query}
               onChange={e => setQuery(e.target.value)}
               onKeyDown={onEnter}
-              placeholder="MUEBLE 1 ' E1"
+              placeholder="Roxana"
             />
           </>
         )}
+
         {searchType === 'vigencia' && (
           <>
             <label>Vigencia (días o rango):</label>
@@ -642,18 +615,18 @@ export default function Inventario() {
               onChange={e => setQuery(e.target.value)}
               onKeyDown={onEnter}
               placeholder="15  ó  15-20"
-              title="Muestra paquetes EN INVENTARIO con N días desde su recepción, o un rango (p.ej. 15-20)."
+              title="Muestra paquetes en inventario con N días desde recepción, o un rango (p.ej. 15-20)."
             />
           </>
         )}
       </div>
 
-      {/* Conteo TOTAL según filtro activo */}
+      {/* Conteo TOTAL */}
       <div style={{ marginBottom: 8, fontWeight: 600, color: '#163E7A' }}>
         Total: {totalCount} paquetes
       </div>
 
-      {/* Tabla con scroll vertical interno */}
+      {/* Tabla */}
       <div
         style={{
           overflowX: 'auto',
@@ -673,35 +646,48 @@ export default function Inventario() {
               ))}
             </tr>
           </thead>
-        <tbody>
-          {rows.length ? rows.map((r, idx) => (
-            <tr key={idx} style={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
-              {FIXED_COLUMNS.map(c => {
-                let rawVal = r[c]
-                if (c === 'devolucion_subtipo' && r['estado'] !== 'DEVOLUCION') rawVal = '-'
-                if (['responsable_consolidado','cambio_en_sistema_por','observaciones'].includes(c)
-                    && (rawVal == null || String(rawVal).trim() === '')) rawVal = '-'
-                return (
-                  <td key={c} style={{ padding: 8, verticalAlign: 'top', whiteSpace: c === 'observaciones' ? 'pre-wrap' : 'normal' }}>
-                    {fmtCell(rawVal)}
-                  </td>
-                )
-              })}
-            </tr>
-          )) : (
-            <tr>
-              <td colSpan={FIXED_COLUMNS.length} style={{ padding: 16, textAlign: 'center', opacity: .7 }}>
-                Sin resultados
-              </td>
-            </tr>
-          )}
-        </tbody>
+          <tbody>
+            {rows.length ? rows.map((r, idx) => (
+              <tr key={idx} style={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
+                {FIXED_COLUMNS.map(c => {
+                  let rawVal = r[c]
+                  if (c === 'devolucion_subtipo' && r['estado'] !== 'NO_ENTREGABLE') rawVal = '-'
+                  if (['responsable_consolidado','cambio_en_sistema_por','observaciones'].includes(c)
+                      && (rawVal == null || String(rawVal).trim() === '')) rawVal = '-'
+                  return (
+                    <td
+                      key={c}
+                      style={{
+                        padding: 8,
+                        verticalAlign: 'top',
+                        whiteSpace: c === 'observaciones' ? 'pre-wrap' : 'normal'
+                      }}
+                    >
+                      {fmtCell(rawVal)}
+                    </td>
+                  )
+                })}
+              </tr>
+            )) : (
+              <tr>
+                <td colSpan={FIXED_COLUMNS.length} style={{ padding: 16, textAlign: 'center', opacity: .7 }}>
+                  Sin resultados
+                </td>
+              </tr>
+            )}
+          </tbody>
         </table>
       </div>
 
-      {/* Paginación simple para 'todos' y 'vigencia' */}
-      {['todos','vigencia'].includes(searchType) && totalCount > rows.length && (
-        <div style={{ marginTop: 10 }}>
+      {/* Paginación */}
+      {['todos','vigencia'].includes(searchType) && (
+        <div style={{ marginTop: 10, display:'flex', gap:8, alignItems:'center' }}>
+          <span style={{ opacity:.75 }}>
+            Mostrando {Math.min(totalCount, offset + rows.length)} / {totalCount}
+          </span>
+          <button onClick={cargarMas} disabled={loading || !hasMore}>
+            {loading ? 'Cargando…' : 'Cargar más'}
+          </button>
         </div>
       )}
     </div>

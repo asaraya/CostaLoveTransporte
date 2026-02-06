@@ -71,7 +71,16 @@ const safeSheetName = (name) => {
   return cleaned.length <= 31 ? cleaned : cleaned.slice(0, 31)
 }
 
-const esCR = { timeZone: 'America/Costa_Rica' }
+const CR_TZ = 'America/Costa_Rica'
+const CR_OFFSET = '-06:00' // ✅ CR fijo (sin DST)
+
+/** Fecha YYYY-MM-DD → ISO con offset CR fijo */
+const toOffsetISO = (yyyyMmDd, hh = '00', mm = '00', ss = '00') => {
+  if (!yyyyMmDd) return null
+  return `${yyyyMmDd}T${hh}:${mm}:${ss}${CR_OFFSET}`
+}
+
+const esCR = { timeZone: CR_TZ }
 const fmtDMY = (val) => {
   if (!val) return '-'
   const d = new Date(val)
@@ -100,16 +109,6 @@ export default function Reportes() {
 
   // auto-consulta al cambiar modo/fecha(s)
   useEffect(() => { consultar() }, [mode, fecha, desde, hasta])
-
-  const toOffsetISO = (yyyyMmDd, hh = '00', mm = '00', ss = '00') => {
-    if (!yyyyMmDd) return null
-    const offMin = -new Date().getTimezoneOffset()
-    const sign = offMin >= 0 ? '+' : '-'
-    const abs = Math.abs(offMin)
-    const hhOff = String(Math.floor(abs / 60)).padStart(2, '0')
-    const mmOff = String(abs % 60).padStart(2, '0')
-    return `${yyyyMmDd}T${hh}:${mm}:${ss}${sign}${hhOff}:${mmOff}`
-  }
 
   const consultar = async () => {
     setLoading(true)
@@ -256,6 +255,7 @@ export default function Reportes() {
       const BATCH = 1000
       const all = []
       for (let off = 0; off < total; off += BATCH) {
+        // eslint-disable-next-line no-await-in-loop
         const { data: resp } = await api.get('/busqueda/inventario', {
           params: { estado: 'EN_INVENTARIO', limit: BATCH, offset: off }
         })
@@ -316,11 +316,10 @@ export default function Reportes() {
             Generar reporte (Del día)
           </button>
 
-          {/* NUEVO: Generar reporte (Inventario) */}
           <button
             onClick={generarReporteInventario}
             disabled={loading || exportingInv}
-            title="Genera un Excel con todos los paquetes actualmente EN INVENTARIO (ignora rango/fecha)"
+            title="Genera un Excel con todos los paquetes actualmente EN_INVENTARIO (ignora rango/fecha)"
           >
             {exportingInv ? 'Generando…' : 'Generar reporte (De todo el inventario)'}
           </button>
@@ -342,14 +341,13 @@ export default function Reportes() {
           </label>
 
           <button onClick={generarReporte} disabled={loading || totalFilas() === 0}>
-            Generar reporte (Del día)
+            Generar reporte (Rango)
           </button>
 
-          {/* NUEVO: Generar reporte (Inventario) */}
           <button
             onClick={generarReporteInventario}
             disabled={loading || exportingInv}
-            title="Genera un Excel con todos los paquetes actualmente EN INVENTARIO (ignora rango/fecha)"
+            title="Genera un Excel con todos los paquetes actualmente EN_INVENTARIO (ignora rango/fecha)"
           >
             {exportingInv ? 'Generando…' : 'Generar reporte (De todo el inventario)'}
           </button>
@@ -363,12 +361,10 @@ export default function Reportes() {
         </div>
       )}
 
-      {/* KPIs */}
       <div style={{display:'grid', gridTemplateColumns:'repeat(5, 1fr)', gap:12, margin:'12px 0'}}>
         {kpi.map((k, i) => <Kpi key={i} title={k.title} value={k.value} />)}
       </div>
 
-      {/* Tablas con las columnas fijas */}
       <section style={{ marginTop: 8 }}>
         <h4>Listo para retirar tienda aeropost {mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)}</h4>
         <DataTable rows={recibidos} dateKey="received_at" />
@@ -430,7 +426,6 @@ function rangoLabel(desde, hasta){
   return ''
 }
 
-/* ===================== TABLA con las columnas fijas (sin Tracking Intranet) ===================== */
 function DataTable({ rows, dateKey }){
   const data = (rows || []).map(r => ({
     marchamo: r?.marchamo ?? '-',

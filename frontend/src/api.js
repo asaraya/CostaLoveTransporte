@@ -1,25 +1,24 @@
 // src/api.js
-import axios from 'axios';
+import axios from 'axios'
 
-const BASE = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
+const BASE = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '')
 
 export const api = axios.create({
   baseURL: BASE,
   timeout: 160000,
   withCredentials: true,
-});
+})
 
 // ---------- Toast helpers (mínimos, no intrusivos) ----------
 export function toastOk(msg) {
-  // Mantén simple y consistente con toastErr; si más adelante tienes un UI de toasts, puedes reemplazar aquí
   try {
     if (typeof window !== 'undefined' && window?.alert) {
-      window.alert(msg || 'OK');
+      window.alert(msg || 'OK')
     } else {
-      console.log('OK:', msg);
+      console.log('OK:', msg)
     }
   } catch {
-    console.log('OK:', msg);
+    console.log('OK:', msg)
   }
 }
 
@@ -28,15 +27,15 @@ export function toastErr(err) {
     err?.response?.data?.message ||
     err?.response?.data?.error ||
     err?.message ||
-    'Error';
+    'Error'
   try {
     if (typeof window !== 'undefined' && window?.alert) {
-      window.alert(msg);
+      window.alert(msg)
     } else {
-      console.error('Error:', msg);
+      console.error('Error:', msg)
     }
   } catch {
-    console.error('Error:', msg);
+    console.error('Error:', msg)
   }
 }
 
@@ -48,42 +47,34 @@ export function toastErr(err) {
 export const sacoApi = {
   exists: (marchamo) =>
     api.get(`/sacos/${encodeURIComponent(marchamo)}/exists`),
-  create: (payload) =>
-    api.post('/sacos', payload), // { marchamo, defaultUbicacionCodigo? }
+  // { marchamo, defaultDistritoNombre? }
+  create: (payload) => api.post('/sacos', payload),
   deleteIfEmpty: (marchamo) =>
     api.delete(`/sacos/${encodeURIComponent(marchamo)}`),
-  // Compat opcional si el backend también expone este alias:
+  // Compat opcional (proyecto viejo)
   deleteIfEmptyCompat: (marchamo) =>
     api.post('/sacos/eliminarSacoSiVacio', { marchamo }),
-};
+}
 
-// Paquete
+// Paquete (recepción / eliminación / cambios de estado)
 export const paqueteApi = {
-  create: (payload) =>
-    api.post('/paquetes', payload), // { trackingCode|tracking, marchamo, ubicacionCodigo, receivedAt? }
-  exists: (tracking) =>
-    api.get(`/paquetes/${encodeURIComponent(tracking)}/exists`),
-  delete: (tracking) =>
-    api.delete(`/paquetes/${encodeURIComponent(tracking)}`),
-  estadoBulk: (payload) =>
-    api.post('/paquetes/estado/bulk', payload),
-};
+  // { trackingCode|tracking, marchamo, distritoNombre, receivedAt? }
+  create: (payload) => api.post('/paquetes', payload),
+  exists: (tracking) => api.get(`/paquetes/${encodeURIComponent(tracking)}/exists`),
+  delete: (tracking) => api.delete(`/paquetes/${encodeURIComponent(tracking)}`),
 
-// Ubicaciones
-export const ubicacionApi = {
-  // Ajusta si tu backend usa otro path (ej. /api/ubicaciones/activas)
-  activas: () => api.get('/ubicaciones/activas'),
-};
+  // Cambios de estado (Transportistas)
+  // Preferido: /estado/bulk y /estado/tracking
+  estadoBulk: (payload) => api.post('/estado/bulk', payload),
+  estadoBulkCompat: (payload) => api.post('/paquetes/estado/bulk', payload),
+  estadoTracking: (payload) => api.post('/estado/tracking', payload),
 
-// (Opcional) Si luego vuelves a usar reportes desde el front:
-// export const reportesApi = {
-//   diario: (fechaISO) => api.get('/reportes/diario', { params: { fecha: fechaISO } }),
-//   entregados: (params) => api.get('/reportes/entregados', { params }),
-//   devolucion: (params) => api.get('/reportes/devolucion', { params }),
-// };
+  // Eliminación en lote (ADMIN)
+  bulkDelete: (payload) => api.post('/paquetes/bulk-delete', payload),
+}
 
 export const authApi = {
   me: () => api.get('/auth/me'),
   login: (payload) => api.post('/auth/login', payload),
   logout: () => api.post('/auth/logout'),
-};
+}
