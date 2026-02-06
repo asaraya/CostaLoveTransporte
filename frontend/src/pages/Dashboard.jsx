@@ -58,7 +58,7 @@ export default function Dashboard() {
     try {
       // OJO: el endpoint puede seguir llamándose "top-ubicaciones" en backend,
       // pero aquí lo tratamos como "top-distritos".
-      const { data } = await api.get('/dashboard/top-ubicaciones', { params: { limit: 100000 } })
+      const { data } = await api.get('/dashboard/top-distritos', { params: { limit: 100000 } })
       const arr = Array.isArray(data) ? data : []
 
       const normalized = arr
@@ -112,7 +112,7 @@ export default function Dashboard() {
     try {
       const [s, u, r, m] = await Promise.all([
         api.get('/dashboard/summary', { params: { fecha } }),
-        api.get('/dashboard/top-ubicaciones', { params: { limit: 100000 } }),
+        api.get('/dashboard/top-distritos', { params: { limit: 100000 } }),
         api.get('/dashboard/ultimos-recibidos', { params: { limit: 10, fecha } }),
         api.get('/dashboard/ultimos-movimientos', { params: { fecha, limit: 100000 } }),
       ])
