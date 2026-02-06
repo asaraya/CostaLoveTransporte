@@ -62,13 +62,26 @@ const SEARCH_TYPES = [
   { key: 'vigencia',  label: 'Vigencia' },
 ]
 
-// Subfiltros para NO_ENTREGABLE
-const DEV_SUBS = [
-  { key: 'TODOS',        label: 'Todos' },
-  { key: 'FUERA_DE_RUTA',label: 'Fuera de ruta' },
-  { key: 'VENCIDOS',     label: 'Vencidos' },
-  { key: 'DOS_INTENTOS', label: '2 intentos' },
+// ✅ Estados (códigos) -> nombres EXACTOS que pediste + orden correcto
+const ESTADOS_UI = [
+  { key: 'ENTREGADO_A_TRANSPORTISTA_LOCAL', label: 'Entregado a transportista local' },
+  { key: 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE', label: 'No entregado - Consignatario no disponible' },
+  { key: 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO', label: 'Entregado a transportista local - 2do intento' },
+  { key: 'NO_ENTREGABLE', label: 'No entregable - Retornado a oficina local' },
+  { key: 'TODOS', label: 'Todos' },
 ]
+
+const ESTADO_LABEL = Object.fromEntries(ESTADOS_UI.map(x => [x.key, x.label]))
+
+// Subfiltros para NO_ENTREGABLE (subestados)
+const DEV_SUBS = [
+  { key: 'TODOS',         label: 'Todos' },
+  { key: 'FUERA_DE_RUTA', label: 'Fuera de ruta' },
+  { key: 'VENCIDOS',      label: 'Vencidos' },
+  { key: 'DOS_INTENTOS',  label: 'Dos intentos' },
+]
+
+const DEV_SUB_LABEL = Object.fromEntries(DEV_SUBS.map(x => [x.key, x.label]))
 
 /* Helper de TZ local (CR) para display */
 const fmtDateTime = (iso) => {
@@ -82,6 +95,17 @@ function fmtCell(val) {
   if (typeof val === 'string' && /\d{4}-\d{2}-\d{2}T/.test(val)) return fmtDateTime(val)
   if (typeof val === 'number') return String(val)
   return String(val)
+}
+
+function fmtEstado(code) {
+  if (!code) return ''
+  return ESTADO_LABEL[code] || code
+}
+
+function fmtDevSub(estadoCode, subCode) {
+  if (estadoCode !== 'NO_ENTREGABLE') return '-'
+  if (!subCode) return '-'
+  return DEV_SUB_LABEL[subCode] || subCode
 }
 
 /* === Helpers para exportación === */
@@ -220,8 +244,8 @@ export default function Inventario() {
   const [pageSize, setPageSize] = useState(20)
   const [offset, setOffset] = useState(0)
 
-  // Estado para "Todos"
-  const [estadoTodos, setEstadoTodos] = useState('NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE')
+  // ✅ Estado para "Todos" (por defecto: recepción)
+  const [estadoTodos, setEstadoTodos] = useState('ENTREGADO_A_TRANSPORTISTA_LOCAL')
 
   // Subfiltro devolución
   const [devSub, setDevSub] = useState('TODOS')
@@ -422,9 +446,18 @@ export default function Inventario() {
       const obj = {}
       columns.forEach(c => {
         let val = r[c]
-        if (c === 'devolucion_subtipo' && r['estado'] !== 'NO_ENTREGABLE') val = '-'
+
+        if (c === 'estado') {
+          val = fmtEstado(r['estado'])
+        }
+
+        if (c === 'devolucion_subtipo') {
+          val = fmtDevSub(r['estado'], r['devolucion_subtipo'])
+        }
+
         if (['responsable_consolidado','cambio_en_sistema_por','observaciones'].includes(c)
             && (val == null || String(val).trim() === '')) val = '-'
+
         obj[prettyHeader(c)] = fmtCell(val)
       })
       return obj
@@ -482,45 +515,16 @@ export default function Inventario() {
           <>
             <label>Estado a listar:</label>
 
-            <button
-              className={`toggle ${estadoTodos === 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' ? 'is-selected' : ''}`}
-              aria-pressed={estadoTodos === 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'}
-              onClick={() => handleEstadoClick('NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE')}
-            >
-              Disponible
-            </button>
-
-            <button
-              className={`toggle ${estadoTodos === 'ENTREGADO_A_TRANSPORTISTA_LOCAL' ? 'is-selected' : ''}`}
-              aria-pressed={estadoTodos === 'ENTREGADO_A_TRANSPORTISTA_LOCAL'}
-              onClick={() => handleEstadoClick('ENTREGADO_A_TRANSPORTISTA_LOCAL')}
-            >
-              Entregado a transportista
-            </button>
-
-            <button
-              className={`toggle ${estadoTodos === 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO' ? 'is-selected' : ''}`}
-              aria-pressed={estadoTodos === 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'}
-              onClick={() => handleEstadoClick('ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')}
-            >
-              Entregado (2do intento)
-            </button>
-
-            <button
-              className={`toggle ${estadoTodos === 'NO_ENTREGABLE' ? 'is-selected' : ''}`}
-              aria-pressed={estadoTodos === 'NO_ENTREGABLE'}
-              onClick={() => handleEstadoClick('NO_ENTREGABLE')}
-            >
-              No entregable (devolución)
-            </button>
-
-            <button
-              className={`toggle ${estadoTodos === 'TODOS' ? 'is-selected' : ''}`}
-              aria-pressed={estadoTodos === 'TODOS'}
-              onClick={() => handleEstadoClick('TODOS')}
-            >
-              Todos
-            </button>
+            {ESTADOS_UI.map(opt => (
+              <button
+                key={opt.key}
+                className={`toggle ${estadoTodos === opt.key ? 'is-selected' : ''}`}
+                aria-pressed={estadoTodos === opt.key}
+                onClick={() => handleEstadoClick(opt.key)}
+              >
+                {opt.label}
+              </button>
+            ))}
 
             {estadoTodos === 'NO_ENTREGABLE' && (
               <div style={{ display:'flex', gap:8, alignItems:'center', marginLeft:8 }}>
@@ -615,7 +619,7 @@ export default function Inventario() {
               onChange={e => setQuery(e.target.value)}
               onKeyDown={onEnter}
               placeholder="15  ó  15-20"
-              title="Muestra paquetes en inventario con N días desde recepción, o un rango (p.ej. 15-20)."
+              title="Muestra paquetes con N días desde recepción, o un rango (p.ej. 15-20)."
             />
           </>
         )}
@@ -651,9 +655,18 @@ export default function Inventario() {
               <tr key={idx} style={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
                 {FIXED_COLUMNS.map(c => {
                   let rawVal = r[c]
-                  if (c === 'devolucion_subtipo' && r['estado'] !== 'NO_ENTREGABLE') rawVal = '-'
+
+                  if (c === 'estado') {
+                    rawVal = fmtEstado(r['estado'])
+                  }
+
+                  if (c === 'devolucion_subtipo') {
+                    rawVal = fmtDevSub(r['estado'], r['devolucion_subtipo'])
+                  }
+
                   if (['responsable_consolidado','cambio_en_sistema_por','observaciones'].includes(c)
                       && (rawVal == null || String(rawVal).trim() === '')) rawVal = '-'
+
                   return (
                     <td
                       key={c}
