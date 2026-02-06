@@ -130,7 +130,7 @@ export default function App() {
   }, [loc.pathname])
 
   const displayUser = me?.name || me?.username || '—'
-
+  const displaySucursal = "Transportista"
   return (
     <>
       {/* Topbar (se oculta en login/register) */}
@@ -183,6 +183,21 @@ export default function App() {
                 {displayUser}
               </div>
 
+                <div
+                title="Sucursal"
+                style={{
+                  background: '#ffffff',
+                  color: '#163E7A',
+                  border: '2px solid #163E7A',
+                  borderRadius: 10,
+                  padding: '8px 12px',
+                  fontWeight: 700,
+                  lineHeight: 1,
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                {displaySucursal}
+              </div>
               {/* Botón cerrar sesión (a la derecha) */}
               <LogoutButton
                 style={{
