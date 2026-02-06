@@ -1,14 +1,14 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import api from '../api'
+import { useEffect, useState } from 'react'
+import { api } from '../api'
 import * as XLSX from 'xlsx'
 
-// ===== Estados oficiales + etiqueta UI =====
-const ESTADOS = [
-  { key: 'ENTREGADO_A_TRANSPORTISTA_LOCAL', label: 'Entregado a transportista local' },
-  { key: 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE', label: 'No entregado - Consignatario no disponible' },
-  { key: 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO', label: 'Entregado a transportista local - 2do intento' },
-  { key: 'NO_ENTREGABLE', label: 'No entregable - Retornado a oficina local' },
-]
+const CR_TZ = 'America/Costa_Rica'
+
+// YYYY-MM-DD -> ISO con offset CR fijo (-06:00)
+const toCRISO = (yyyyMmDd, hh = '00', mm = '00', ss = '00') => {
+  if (!yyyyMmDd) return null
+  return `${yyyyMmDd}T${hh}:${mm}:${ss}-06:00`
+}
 
 // En inventario = unión de los 3 primeros
 const ESTADOS_INVENTARIO = new Set([
@@ -67,7 +67,7 @@ const FIXED_KEYS_XLSX = [
   'fecha',
 ]
 
-const esCR = { timeZone: 'America/Costa_Rica' }
+const esCR = { timeZone: CR_TZ }
 
 function labelEstado(e) {
   const k = String(e || '').toUpperCase()
@@ -162,18 +162,11 @@ export default function Reportes() {
 
   useEffect(() => { consultar() }, [mode, fecha, desde, hasta, filtrarFechas])
 
-  // Backend trabaja en TZ Costa Rica (-06:00). Para no depender del huso del navegador,
-  // mandamos siempre el offset fijo.
-  const toCRISO = (yyyyMmDd, hh = '00', mm = '00', ss = '00') => {
-    if (!yyyyMmDd) return null
-    return `${yyyyMmDd}T${hh}:${mm}:${ss}-06:00`
-  }
-
   const consultar = async () => {
     setLoading(true)
     try {
       // Snapshot actual (sin filtro) por defecto.
-      // Si el usuario activa "Filtrar por fecha", usamos last_state_change_at (CAMBIO).
+      // Si el usuario activa "Filtrar por fecha", usamos last_state_change_at (ELSE del SP).
       let paramsBase = {}
       if (filtrarFechas) {
         let iniISO = null, finISO = null
@@ -187,6 +180,7 @@ export default function Reportes() {
         }
 
         paramsBase = {
+          // CAMBIO no existe literal en el SP, pero cae en el ELSE => last_state_change_at
           tipoFecha: 'CAMBIO',
           ...(iniISO && { desde: iniISO }),
           ...(finISO && { hasta: finISO }),
@@ -210,6 +204,7 @@ export default function Reportes() {
       setStEntregado2do(aE2)
       setStNoEntregable(aNEN)
 
+      // “En inventario” = unión deduplicada por tracking
       setStInventario(uniqByTracking([...aETL, ...aNE, ...aE2]))
     } catch (e) {
       alert(e?.response?.data?.message || e?.message || 'Error')
@@ -261,6 +256,7 @@ export default function Reportes() {
     const stamp = !filtrarFechas
       ? `actual_${hoy}`
       : (mode === 'dia' ? fecha : `${desde}_${hasta}`)
+
     const dateKey = 'last_state_change_at'
 
     if (exportFormat === 'xlsx') {
@@ -283,7 +279,6 @@ export default function Reportes() {
       ...projectRows(stInventario, dateKey),
     ]
 
-    // Agregar tracking intranet solo en export
     const allWithIntranet = all.map(d => ({
       ...d,
       tracking_intranet: (d.tracking && d.tracking !== '-') ? `${d.tracking},` : '-',
@@ -293,6 +288,7 @@ export default function Reportes() {
     const rows = allWithIntranet.map(d => Object.fromEntries(FIXED_KEYS_XLSX.map(k => [FIXED_HEADERS[k], d[k]])))
     const ws = XLSX.utils.json_to_sheet(rows, { header: headers })
     const csv = XLSX.utils.sheet_to_csv(ws)
+
     const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csv], { type: 'text/csv;charset=utf-8;' })
     downloadBlob(blob, `reporte_estados_${stamp}.csv`)
   }
@@ -412,10 +408,9 @@ function Kpi({ title, value }) {
 }
 
 function rangoLabel(desde, hasta) {
-  const TZ = 'America/Costa_Rica'
   const mk = (ymd) => ymd ? new Date(`${ymd}T00:00:00-06:00`) : null
   const a = mk(desde), b = mk(hasta)
-  const fmt = (d) => d ? d.toLocaleDateString('es-CR', { timeZone: TZ }) : '—'
+  const fmt = (d) => d ? d.toLocaleDateString('es-CR', { timeZone: CR_TZ }) : '—'
   if (a && b) return `(${fmt(a)} → ${fmt(b)})`
   if (a) return `(desde ${fmt(a)})`
   if (b) return `(hasta ${fmt(b)})`
