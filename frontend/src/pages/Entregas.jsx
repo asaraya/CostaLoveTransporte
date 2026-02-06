@@ -43,12 +43,12 @@ export default function Entregas() {
   // fecha del cambio de estado
   const [fecha, setFecha] = useState(todayCR())
 
-  // Estados del backend NUEVO
+  // Estados (labels según lo solicitado)
   const ESTADOS = [
-    { val: 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE', label: 'En inventario (disponible)' },
     { val: 'ENTREGADO_A_TRANSPORTISTA_LOCAL', label: 'Entregado a transportista local' },
-    { val: 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO', label: 'Entregado a transportista local (2do intento)' },
-    { val: 'NO_ENTREGABLE', label: 'No entregable' },
+    { val: 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE', label: 'No entregado - Consignatario no disponible' }, // 1er intento
+    { val: 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO', label: 'Entregado a transportista local - 2do intento' }, // 2do intento
+    { val: 'NO_ENTREGABLE', label: 'No entregable - Retornado a oficina local' }, // devolución
   ]
   const [nuevoEstado, setNuevoEstado] = useState(ESTADOS[0].val)
 

@@ -9,17 +9,17 @@ const toCRISO = (yyyyMmDd, hh = '00', mm = '00', ss = '00') => {
   return `${yyyyMmDd}T${hh}:${mm}:${ss}-06:00`
 }
 
-// Estado que tu UI llama “inventario” en este sistema (según tu código actual)
-const INVENTARIO_STATE = 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'
+const ESTADO_LABEL = {
+  ENTREGADO_A_TRANSPORTISTA_LOCAL: 'Entregado a transportista local',
+  NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE: 'No entregado - Consignatario no disponible',
+  ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO: 'Entregado a transportista local - 2do intento',
+  NO_ENTREGABLE: 'No entregable - Retornado a oficina local',
+}
 
-// Normaliza nombre de distrito desde distintas formas posibles del backend
-const pickDistritoNombre = (r) =>
-  r?.distrito ??
-  r?.distrito_nombre ??
-  r?.nombre ??
-  r?.ubicacion ??              // fallback legacy
-  r?.ubicacion_codigo ??       // fallback legacy
-  '-'
+const labelEstado = (code) => {
+  const k = String(code ?? '').toUpperCase()
+  return ESTADO_LABEL[k] || (code ?? '-')
+}
 
 export default function Dashboard() {
   const [fecha, setFecha] = useState(() =>
@@ -27,15 +27,12 @@ export default function Dashboard() {
   )
 
   const [summary, setSummary] = useState(null)
-
-  // === Distritos con inventario ===
   const [topDistritos, setTopDistritos] = useState([])
-
   const [ultimosRec, setUltimosRec] = useState([])
   const [ultimosMov, setUltimosMov] = useState([])
   const [loading, setLoading] = useState(false)
 
-  // Modal: paquetes por distrito (solo INVENTARIO_STATE)
+  // Modal: paquetes por distrito (solo NO_ENTREGADO...)
   const [distModal, setDistModal] = useState({
     open: false,
     distrito: '',
@@ -48,73 +45,39 @@ export default function Dashboard() {
   const [fechaPF, setFechaPF] = useState(() =>
     new Intl.DateTimeFormat('en-CA', { timeZone: CR_TZ }).format(new Date())
   )
-  const [tabPF, setTabPF] = useState('RECIBIDOS') // RECIBIDOS | ENTREGADOS | INVENTARIO
-  const [pfData, setPfData] = useState({ recibidos: [], entregados: [], inventario: [] })
+  const [tabPF, setTabPF] = useState('RECIBIDOS') // RECIBIDOS | NO_ENTREGADOS | ENTREGADOS | NO_ENTREGABLES
+  const [pfData, setPfData] = useState({
+    recibidos: [],
+    noEntregados: [],
+    entregados: [],
+    noEntregables: [],
+  })
   const [pfLoading, setPfLoading] = useState(false)
 
-  // ===========================
-  //   CARGA: DISTRITOS (BD)
-  // ===========================
-  const cargarDistritosConInventario = async () => {
+  const cargarTopDistritos = async () => {
     try {
-      // 1) Conteos por distrito (ideal: /dashboard/top-distritos; fallback: /dashboard/top-ubicaciones)
-      let conteos = []
-      try {
-        const { data } = await api.get('/dashboard/top-distritos', { params: { limit: 100000 } })
-        conteos = Array.isArray(data) ? data : []
-      } catch {
-        const { data } = await api.get('/dashboard/top-ubicaciones', { params: { limit: 100000 } })
-        conteos = Array.isArray(data) ? data : []
-      }
+      // OJO: el endpoint puede seguir llamándose "top-ubicaciones" en backend,
+      // pero aquí lo tratamos como "top-distritos".
+      const { data } = await api.get('/dashboard/top-ubicaciones', { params: { limit: 100000 } })
+      const arr = Array.isArray(data) ? data : []
 
-      // Map conteos: nombreDistrito -> cantidad
-      const mapConteos = new Map()
-      for (const r of conteos) {
-        const nombre = pickDistritoNombre(r)
-        const cantidad = Number(r?.cantidad ?? 0) || 0
-        if (nombre && nombre !== '-') mapConteos.set(nombre, cantidad)
-      }
-
-      // 2) Catálogo de distritos desde BD (ideal: /distritos; fallback: /distritos/activos)
-      //    Si existe, mostramos TODOS los distritos de BD (aunque tengan 0) y ordenamos desc por cantidad.
-      let catalogo = null
-      try {
-        const { data } = await api.get('/distritos')
-        catalogo = Array.isArray(data) ? data : null
-      } catch {
-        try {
-          const { data } = await api.get('/distritos/activos')
-          catalogo = Array.isArray(data) ? data : null
-        } catch {
-          catalogo = null
-        }
-      }
-
-      let rows = []
-
-      if (catalogo && catalogo.length) {
-        // soporta: [{id,nombre,activo}, ...] o ["La colonia", ...]
-        const nombres = catalogo
-          .map((d) => (typeof d === 'string' ? d : d?.nombre))
-          .filter(Boolean)
-
-        rows = nombres.map((nombre) => ({
-          distrito: nombre,
-          cantidad: mapConteos.get(nombre) ?? 0,
+      const normalized = arr
+        .map((r) => ({
+          distrito:
+            r?.distrito ??
+            r?.distrito_nombre ??
+            r?.ubicacion ??
+            r?.ubicacion_codigo ??
+            r?.nombre ??
+            '',
+          cantidad: Number(r?.cantidad ?? r?.total ?? r?.count ?? 0) || 0,
         }))
-      } else {
-        // si no hay catálogo, usamos lo que venga del endpoint de conteos
-        rows = conteos.map((r) => ({
-          distrito: pickDistritoNombre(r),
-          cantidad: Number(r?.cantidad ?? 0) || 0,
-        }))
-      }
+        .filter((x) => x.distrito)
 
-      rows.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0))
-      setTopDistritos(rows)
+      normalized.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0))
+      setTopDistritos(normalized)
     } catch (e) {
-      alert(e?.response?.data?.message || e?.message || 'Error cargando distritos')
-      setTopDistritos([])
+      alert(e?.response?.data?.message || e?.message || 'Error')
     }
   }
 
@@ -147,13 +110,32 @@ export default function Dashboard() {
   const cargarTodo = async () => {
     setLoading(true)
     try {
-      const [s, r, m] = await Promise.all([
+      const [s, u, r, m] = await Promise.all([
         api.get('/dashboard/summary', { params: { fecha } }),
+        api.get('/dashboard/top-ubicaciones', { params: { limit: 100000 } }),
         api.get('/dashboard/ultimos-recibidos', { params: { limit: 10, fecha } }),
         api.get('/dashboard/ultimos-movimientos', { params: { fecha, limit: 100000 } }),
       ])
 
       setSummary(s.data)
+
+      const arr = Array.isArray(u.data) ? u.data : []
+      const normalized = arr
+        .map((r) => ({
+          distrito:
+            r?.distrito ??
+            r?.distrito_nombre ??
+            r?.ubicacion ??
+            r?.ubicacion_codigo ??
+            r?.nombre ??
+            '',
+          cantidad: Number(r?.cantidad ?? r?.total ?? r?.count ?? 0) || 0,
+        }))
+        .filter((x) => x.distrito)
+
+      normalized.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0))
+      setTopDistritos(normalized)
+
       setUltimosRec(Array.isArray(r.data) ? r.data : [])
 
       const movSrc = Array.isArray(m.data) ? m.data : []
@@ -163,8 +145,6 @@ export default function Dashboard() {
         return db - da
       })
       setUltimosMov(movHoy)
-
-      await cargarDistritosConInventario()
     } catch (e) {
       alert(e?.response?.data?.message || e?.message || 'Error')
     } finally {
@@ -172,20 +152,19 @@ export default function Dashboard() {
     }
   }
 
-  // Cargas iniciales
-  useEffect(() => { cargarDistritosConInventario() }, [])
+  useEffect(() => { cargarTopDistritos() }, [])
   useEffect(() => { cargarFecha() }, [fecha])
 
-  // Modal: paquetes por distrito (solo INVENTARIO_STATE)
+  // Modal: paquetes del distrito (solo NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE)
   const openDistritoModal = async (distrito) => {
     setDistModal({ open: true, distrito, rows: [], loading: true, error: null })
     try {
       const { data } = await api.get(`/busqueda/distrito/${encodeURIComponent(distrito)}`, {
-        params: { estado: INVENTARIO_STATE }
+        params: { estado: 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' }
       })
       const arr = Array.isArray(data) ? data : []
       const rows = arr
-        .filter(r => String(r?.estado ?? '').toUpperCase() === INVENTARIO_STATE)
+        .filter(r => String(r?.estado ?? '').toUpperCase() === 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE')
         .sort((a, b) => new Date(b?.received_at ?? 0).getTime() - new Date(a?.received_at ?? 0).getTime())
 
       setDistModal(prev => ({ ...prev, rows, loading: false }))
@@ -207,12 +186,12 @@ export default function Dashboard() {
     return () => window.removeEventListener('keydown', onKey)
   }, [distModal.open])
 
-  // Fecha lógica del movimiento según el estado destino (fechas REALES si existen)
+  // Fecha lógica del movimiento según el estado destino
   function movFechaOficial(r) {
     if (!r) return null
     const to = String(r.estado_to ?? r.estadoTo ?? '').toUpperCase()
 
-    if (to === INVENTARIO_STATE && r.received_at) return r.received_at
+    if (to === 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' && r.received_at) return r.received_at
     if ((to === 'ENTREGADO_A_TRANSPORTISTA_LOCAL' || to === 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO') && r.delivered_at) return r.delivered_at
     if (to === 'NO_ENTREGABLE' && r.returned_at) return r.returned_at
 
@@ -238,11 +217,15 @@ export default function Dashboard() {
         return est === 'ENTREGADO_A_TRANSPORTISTA_LOCAL' || est === 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'
       })
 
-      const inventario = recibidos.filter(r =>
-        String(r?.estado ?? '').toUpperCase() === INVENTARIO_STATE
+      const noEntregados = recibidos.filter(r =>
+        String(r?.estado ?? '').toUpperCase() === 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'
       )
 
-      setPfData({ recibidos, entregados, inventario })
+      const noEntregables = recibidos.filter(r =>
+        String(r?.estado ?? '').toUpperCase() === 'NO_ENTREGABLE'
+      )
+
+      setPfData({ recibidos, entregados, noEntregados, noEntregables })
     } catch (e) {
       alert(e?.response?.data?.message || e?.message || 'Error')
     } finally {
@@ -252,7 +235,8 @@ export default function Dashboard() {
 
   const currentPFRows = (() => {
     if (tabPF === 'ENTREGADOS') return pfData.entregados
-    if (tabPF === 'INVENTARIO') return pfData.inventario
+    if (tabPF === 'NO_ENTREGADOS') return pfData.noEntregados
+    if (tabPF === 'NO_ENTREGABLES') return pfData.noEntregables
     return pfData.recibidos
   })()
 
@@ -266,18 +250,18 @@ export default function Dashboard() {
         <label>Fecha:
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} />
         </label>
-        <button onClick={cargarTodo} disabled={loading}>
-          {loading ? 'Actualizando…' : 'Actualizar'}
-        </button>
+        <button onClick={cargarTodo} disabled={loading}>{loading ? 'Actualizando…' : 'Actualizar'}</button>
       </div>
 
+      {/* KPIs */}
       {summary && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 12 }}>
           <Kpi title="Paquetes totales" value={summary.totales?.paquetes ?? summary.totalPaquetes ?? 0} />
-          <Kpi title="Inventario actual" value={summary.inventarioActual ?? 0} />
+          <Kpi title="No entregados actuales" value={summary.inventarioActual ?? 0} />
         </div>
       )}
 
+      {/* Hoy */}
       {summary && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 12 }}>
           <Kpi title={`Recibidos ${summary.fecha ?? fecha}`} value={summary.hoy?.recibidos ?? 0} />
@@ -289,6 +273,7 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Por estado */}
       {summary && (
         <div style={{ marginBottom: 16 }}>
           <h4>Paquetes por estado</h4>
@@ -296,7 +281,7 @@ export default function Dashboard() {
             <thead><tr><th>Estado</th><th>Cantidad</th></tr></thead>
             <tbody>
               {summary.byEstado?.map((r, i) => (
-                <tr key={i}><td>{r.estado}</td><td>{r.cantidad}</td></tr>
+                <tr key={i}><td>{labelEstado(r.estado)}</td><td>{r.cantidad}</td></tr>
               ))}
             </tbody>
           </table>
@@ -305,7 +290,7 @@ export default function Dashboard() {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
         <div>
-          <h4>Distritos con inventario (de mayor a menor)</h4>
+          <h4>Distritos con “No entregado - Consignatario no disponible” (de mayor a menor)</h4>
           <table border="1" cellPadding="6" width="100%">
             <thead><tr><th>Distrito</th><th>Cantidad</th></tr></thead>
             <tbody>
@@ -334,7 +319,7 @@ export default function Dashboard() {
         </div>
 
         <div>
-          <h4>Últimos recibidos (2 fechas)</h4>
+          <h4>Últimos recibidos</h4>
           <table border="1" cellPadding="6" width="100%">
             <thead>
               <tr>
@@ -342,19 +327,19 @@ export default function Dashboard() {
                 <th>Marchamo</th>
                 <th>Distrito</th>
                 <th>Recibido (real)</th>
-                <th>Entrada inventario</th>
+                <th>Último cambio</th>
                 <th>Estado</th>
               </tr>
             </thead>
             <tbody>
               {ultimosRec.map((r) => (
-                <tr key={r.id ?? `${r.tracking_code}-${r.received_at}`}>
+                <tr key={r.id}>
                   <td>{r.tracking_code}</td>
                   <td>{r.marchamo}</td>
                   <td>{r.distrito_nombre ?? '-'}</td>
                   <td>{fmtDT(r.received_at)}</td>
-                  <td>{fmtDT(r.entrada_inventario_at ?? r.changed_at ?? r.changedAt)}</td>
-                  <td>{r.estado}</td>
+                  <td>{fmtDT(r.last_state_change_at ?? r.changed_at ?? r.changedAt)}</td>
+                  <td>{labelEstado(r.estado)}</td>
                 </tr>
               ))}
               {!ultimosRec.length && (
@@ -365,6 +350,7 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Ver paquetes por fecha */}
       <div style={{ marginTop: 16 }}>
         <h4>Ver paquetes por fecha (según recepción REAL)</h4>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
@@ -379,11 +365,14 @@ export default function Dashboard() {
             <button onClick={() => setTabPF('RECIBIDOS')} style={tabBtnStyle(tabPF === 'RECIBIDOS')}>
               Recibidos ({pfData.recibidos.length})
             </button>
+            <button onClick={() => setTabPF('NO_ENTREGADOS')} style={tabBtnStyle(tabPF === 'NO_ENTREGADOS')}>
+              No entregados ({pfData.noEntregados.length})
+            </button>
             <button onClick={() => setTabPF('ENTREGADOS')} style={tabBtnStyle(tabPF === 'ENTREGADOS')}>
               Entregados ({pfData.entregados.length})
             </button>
-            <button onClick={() => setTabPF('INVENTARIO')} style={tabBtnStyle(tabPF === 'INVENTARIO')}>
-              En inventario ({pfData.inventario.length})
+            <button onClick={() => setTabPF('NO_ENTREGABLES')} style={tabBtnStyle(tabPF === 'NO_ENTREGABLES')}>
+              No entregables ({pfData.noEntregables.length})
             </button>
           </div>
         </div>
@@ -416,7 +405,7 @@ export default function Dashboard() {
                     <td style={td}>{r.distrito_nombre ?? '-'}</td>
                     <td style={td}>{r.recipient_name ?? '-'}</td>
                     <td style={td}>{r.content_description ?? '-'}</td>
-                    <td style={td}>{r.estado ?? '-'}</td>
+                    <td style={td}>{labelEstado(r.estado)}</td>
                     <td style={td}>{fmtDT(r[currentPFDateKey])}</td>
                   </tr>
                 ))}
@@ -426,7 +415,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Movimientos del día */}
+      {/* Movimientos */}
       <div style={{ marginTop: 16 }}>
         <h4>Movimientos de estado del {fecha}</h4>
         <div style={{ maxHeight: 340, overflowY: 'auto' }}>
@@ -443,8 +432,8 @@ export default function Dashboard() {
                   <td>{r.tracking_code}</td>
                   <td>{r.marchamo}</td>
                   <td>{r.distrito_nombre ?? '-'}</td>
-                  <td>{r.estado_from ?? '-'}</td>
-                  <td>{r.estado_to ?? '-'}</td>
+                  <td>{labelEstado(r.estado_from ?? '-')}</td>
+                  <td>{labelEstado(r.estado_to ?? '-')}</td>
                   <td>{fmtDT(movFechaOficial(r))}</td>
                   <td>{r.motivo ?? '-'}</td>
                   <td>{r.changed_by ?? '-'}</td>
@@ -458,7 +447,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* MODAL: Paquetes por distrito (solo INVENTARIO_STATE) */}
+      {/* MODAL: Paquetes por distrito (solo NO_ENTREGADO...) */}
       {distModal.open && (
         <div
           onClick={closeDistritoModal}
@@ -472,7 +461,7 @@ export default function Dashboard() {
 
             <h4 style={{ margin: '0 0 10px', color: '#fff' }}>
               Paquetes en: <span style={{ fontWeight: 800 }}>{distModal.distrito}</span>
-              <span style={pill}>INVENTARIO</span>
+              <span style={pill}>NO ENTREGADO</span>
             </h4>
 
             {distModal.loading && <div style={{ padding: 8, color: '#e8f0ff' }}>Cargando paquetes…</div>}
@@ -481,7 +470,7 @@ export default function Dashboard() {
             {!distModal.loading && !distModal.error && (
               <>
                 <div style={{ marginBottom: 8, opacity: .9, color: '#e8f0ff' }}>
-                  Total (inventario): {distModal.rows.length}
+                  Total: {distModal.rows.length}
                 </div>
 
                 <div style={{ overflow: 'auto', maxHeight: '65vh', border: '1px solid rgba(255,255,255,.35)', borderRadius: 8, background: '#fff' }}>
@@ -501,11 +490,11 @@ export default function Dashboard() {
                           <td style={td}>{r.tracking_code}</td>
                           <td style={td}>{r.marchamo}</td>
                           <td style={td}>{r.distrito_nombre ?? '-'}</td>
-                          <td style={td}>{r.estado}</td>
+                          <td style={td}>{labelEstado(r.estado)}</td>
                           <td style={td}>{fmtDT(r.received_at)}</td>
                         </tr>
                       )) : (
-                        <tr><td colSpan={5} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>Sin paquetes en inventario</td></tr>
+                        <tr><td colSpan={5} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>Sin resultados</td></tr>
                       )}
                     </tbody>
                   </table>

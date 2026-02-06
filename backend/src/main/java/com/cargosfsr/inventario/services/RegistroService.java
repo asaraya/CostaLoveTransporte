@@ -107,8 +107,8 @@ public class RegistroService {
         p.setSaco(s);
         p.setDistrito(d);
 
-        // equivalente al "inventario disponible" del sistema anterior
-        p.setEstado(PaqueteEstado.NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE);
+        // ✅ REGLA NUEVA: al hacer recepción, el estado por defecto es ENTREGADO_A_TRANSPORTISTA_LOCAL
+        p.setEstado(PaqueteEstado.ENTREGADO_A_TRANSPORTISTA_LOCAL);
 
         p.setReceivedAt(receivedAt != null ? receivedAt : now);
         p.setLastStateChangeAt(now);
