@@ -22,6 +22,13 @@ public class ConsultasService {
         this.jdbc = jdbc;
     }
 
+    /**
+     * Regla de negocio:
+     * - EN_INVENTARIO = cualquier paquete cuyo estado esté en cualquiera de estos 3 estados.
+     * - NO_ENTREGABLE (cualquier subtipo) = fuera de inventario.
+     */
+    private static final String SQL_ESTADOS_EN_INVENTARIO = "('ENTREGADO_A_TRANSPORTISTA_LOCAL','NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE','ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')";
+
     private Timestamp ts(Instant i) { return i == null ? null : Timestamp.from(i); }
 
     /* ==========================
@@ -73,10 +80,17 @@ public class ConsultasService {
         if ("TODOS".equals(est)) {
             final String sql = selectCols + " ORDER BY v.id DESC LIMIT ? OFFSET ?";
             return jdbc.queryForList(sql, lim, off);
-        } else {
-            final String sql = selectCols + " WHERE v.estado = ? ORDER BY v.id DESC LIMIT ? OFFSET ?";
-            return jdbc.queryForList(sql, est, lim, off);
         }
+
+        // EN_INVENTARIO = 3 estados (no incluye NO_ENTREGABLE)
+        if ("EN_INVENTARIO".equals(est) || "INVENTARIO".equals(est)) {
+            final String sql = selectCols + " WHERE v.estado IN " + SQL_ESTADOS_EN_INVENTARIO +
+                    " ORDER BY v.id DESC LIMIT ? OFFSET ?";
+            return jdbc.queryForList(sql, lim, off);
+        }
+
+        final String sql = selectCols + " WHERE v.estado = ? ORDER BY v.id DESC LIMIT ? OFFSET ?";
+        return jdbc.queryForList(sql, est, lim, off);
     }
 
     /* ==========================
@@ -92,6 +106,13 @@ public class ConsultasService {
         if ("TODOS".equals(est)) {
             return jdbc.queryForObject("SELECT COUNT(*) FROM paquetes", Long.class);
         }
+
+        if ("EN_INVENTARIO".equals(est) || "INVENTARIO".equals(est)) {
+            return jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM paquetes WHERE estado IN " + SQL_ESTADOS_EN_INVENTARIO,
+                    Long.class);
+        }
+
         return jdbc.queryForObject("SELECT COUNT(*) FROM paquetes WHERE estado = ?", Long.class, est);
     }
 

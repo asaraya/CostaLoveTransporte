@@ -64,6 +64,7 @@ const SEARCH_TYPES = [
 
 // ✅ Estados (códigos) -> nombres EXACTOS que pediste + orden correcto
 const ESTADOS_UI = [
+  { key: 'EN_INVENTARIO', label: 'En inventario' },
   { key: 'ENTREGADO_A_TRANSPORTISTA_LOCAL', label: 'Entregado a transportista local' },
   { key: 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE', label: 'No entregado - Consignatario no disponible' },
   { key: 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO', label: 'Entregado a transportista local - 2do intento' },
@@ -245,7 +246,7 @@ export default function Inventario() {
   const [offset, setOffset] = useState(0)
 
   // ✅ Estado para "Todos" (por defecto: recepción)
-  const [estadoTodos, setEstadoTodos] = useState('ENTREGADO_A_TRANSPORTISTA_LOCAL')
+  const [estadoTodos, setEstadoTodos] = useState('EN_INVENTARIO')
 
   // Subfiltro devolución
   const [devSub, setDevSub] = useState('TODOS')

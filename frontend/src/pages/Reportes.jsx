@@ -2,13 +2,15 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 import * as XLSX from 'xlsx'
 
-const ESTADO_LABEL = {
-  ENTREGADO_A_TRANSPORTISTA_LOCAL: 'Entregado a transportista local',
-  NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE: 'No entregado - Consignatario no disponible',
-  ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO: 'Entregado a transportista local - 2do intento',
-  NO_ENTREGABLE: 'No entregable - Retornado a oficina local',
-}
+// ===== Estados oficiales + etiqueta UI =====
+const ESTADOS = [
+  { key: 'ENTREGADO_A_TRANSPORTISTA_LOCAL', label: 'Entregado a transportista local' },
+  { key: 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE', label: 'No entregado - Consignatario no disponible' },
+  { key: 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO', label: 'Entregado a transportista local - 2do intento' },
+  { key: 'NO_ENTREGABLE', label: 'No entregable - Retornado a oficina local' },
+]
 
+const ESTADO_LABEL = Object.fromEntries(ESTADOS.map(e => [e.key, e.label]))
 const labelEstado = (code) => {
   const k = String(code ?? '').toUpperCase()
   return ESTADO_LABEL[k] || (code ?? '-')
@@ -31,7 +33,7 @@ const FIXED_KEYS_XLSX = [
 
 const FIXED_HEADERS = {
   marchamo: 'Marchamo',
-  mueble: 'Distrito',                 // ✅ antes "Mueble"
+  mueble: 'Distrito',
   tracking: 'Tracking',
   tracking_intranet: 'Tracking Intranet',
   nombre: 'Nombre',
@@ -45,12 +47,11 @@ const FIXED_HEADERS = {
 
 /* Nombres de las hojas del Excel */
 const SHEET_TITLES = {
-  recibidos: 'Recibidos',
-  entregados: 'Entregados',
-  devoluciones: 'No entregables',
-  push: 'Push',
-  almacenaje: 'Almacenaje',
-  inventario: 'Inventario',
+  ENTREGADO_A_TRANSPORTISTA_LOCAL: 'Entregado TL',
+  NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE: 'No entregado',
+  ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO: 'Entregado TL 2do',
+  NO_ENTREGABLE: 'No entregable',
+  EN_INVENTARIO: 'En inventario',
 }
 
 /* Excel no permite : \ / ? * [ ] y máximo 31 caracteres */
@@ -67,6 +68,20 @@ const fmtDMY = (val) => {
   return new Intl.DateTimeFormat('es-CR', { ...esCR, day: '2-digit', month: '2-digit', year: 'numeric' }).format(d)
 }
 
+// Dedup por tracking (para EN_INVENTARIO)
+const uniqByTracking = (rows) => {
+  const seen = new Set()
+  const out = []
+  for (const r of (rows || [])) {
+    const t = r?.tracking_code ?? r?.tracking ?? ''
+    if (!t) continue
+    if (seen.has(t)) continue
+    seen.add(t)
+    out.push(r)
+  }
+  return out
+}
+
 export default function Reportes() {
   const hoy = new Intl.DateTimeFormat('en-CA', esCR).format(new Date())
 
@@ -76,11 +91,16 @@ export default function Reportes() {
   const [hasta, setHasta] = useState(hoy)
 
   const [loading, setLoading] = useState(false)
-  const [recibidos, setRecibidos] = useState([])
-  const [entregados, setEntregados] = useState([])
-  const [devoluciones, setDevoluciones] = useState([])
-  const [push, setPush] = useState([])
-  const [almacenaje, setAlmacenaje] = useState([])
+
+  // 4 estados
+  const [stEntregadoTL, setStEntregadoTL] = useState([])
+  const [stNoEntregado, setStNoEntregado] = useState([])
+  const [stEntregado2do, setStEntregado2do] = useState([])
+  const [stNoEntregable, setStNoEntregable] = useState([])
+
+  // implícito: unión de 3 estados que SI están en inventario
+  const [stInventario, setStInventario] = useState([])
+
   const [exportFormat, setExportFormat] = useState('xlsx')
 
   useEffect(() => { consultar() }, [mode, fecha, desde, hasta])
@@ -109,48 +129,51 @@ export default function Reportes() {
         finISO = hasta ? toOffsetISO(hasta, '23', '59', '59') : null
       }
 
-      const [rRec, rEnt, rDev, rPush, rAlm] = await Promise.all([
-        api.get('/busqueda/fecha', {
-          params: { tipoFecha: 'RECEPCION', ...(iniISO && { desde: iniISO }), ...(finISO && { hasta: finISO }) }
-        }),
-        api.get('/reportes/entregados', {
-          params: { ...(iniISO && { desde: iniISO }), ...(finISO && { hasta: finISO }) }
-        }),
-        api.get('/reportes/devolucion', {
-          params: { ...(iniISO && { desde: iniISO }), ...(finISO && { hasta: finISO }) }
-        }),
-        api.get('/reportes/push', {
-          params: { ...(iniISO && { desde: iniISO }), ...(finISO && { hasta: finISO }) }
-        }),
-        api.get('/reportes/almacenaje', {
-          params: { ...(iniISO && { desde: iniISO }), ...(finISO && { hasta: finISO }) }
-        }),
+      const paramsBase = {
+        tipoFecha: 'CAMBIO',
+        ...(iniISO && { desde: iniISO }),
+        ...(finISO && { hasta: finISO }),
+      }
+
+      const [rETL, rNE, rE2, rNEN] = await Promise.all([
+        api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'ENTREGADO_A_TRANSPORTISTA_LOCAL' } }),
+        api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' } }),
+        api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO' } }),
+        api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'NO_ENTREGABLE' } }),
       ])
 
-      setRecibidos(Array.isArray(rRec.data) ? rRec.data : [])
-      setEntregados(Array.isArray(rEnt.data) ? rEnt.data : [])
-      setDevoluciones(Array.isArray(rDev.data) ? rDev.data : [])
-      setPush(Array.isArray(rPush.data) ? rPush.data : [])
-      setAlmacenaje(Array.isArray(rAlm.data) ? rAlm.data : [])
+      const aETL = Array.isArray(rETL.data) ? rETL.data : []
+      const aNE  = Array.isArray(rNE.data) ? rNE.data : []
+      const aE2  = Array.isArray(rE2.data) ? rE2.data : []
+      const aNEN = Array.isArray(rNEN.data) ? rNEN.data : []
+
+      setStEntregadoTL(aETL)
+      setStNoEntregado(aNE)
+      setStEntregado2do(aE2)
+      setStNoEntregable(aNEN)
+
+      setStInventario(uniqByTracking([...aETL, ...aNE, ...aE2]))
     } catch (e) {
       alert(e?.response?.data?.message || e?.message || 'Error')
-    } finally { setLoading(false) }
+    } finally {
+      setLoading(false)
+    }
   }
 
   const resetear = () => {
     setMode('dia'); setFecha(hoy); setDesde(hoy); setHasta(hoy)
-    setRecibidos([]); setEntregados([]); setDevoluciones([]); setPush([]); setAlmacenaje([])
+    setStEntregadoTL([]); setStNoEntregado([]); setStEntregado2do([]); setStNoEntregable([]); setStInventario([])
   }
 
   // Proyección fija para tablas/export
   const projectRows = (rows, dateKey) => {
     return (rows || []).map(r => ({
       marchamo: r?.marchamo ?? '-',
-      mueble: r?.distrito_nombre ?? '-',              // ✅ antes ubicacion_codigo
+      mueble: r?.distrito_nombre ?? '-',
       tracking: r?.tracking_code ?? '-',
       nombre: r?.recipient_name ?? '-',
       descripcion: r?.content_description ?? '-',
-      estado: labelEstado(r?.estado ?? '-'),          // ✅ nombre correcto
+      estado: labelEstado(r?.estado ?? '-'),
       devolucion_subtipo: (String(r?.estado ?? '').toUpperCase() === 'NO_ENTREGABLE')
         ? (r?.devolucion_subtipo ?? '-')
         : '-',
@@ -195,40 +218,41 @@ export default function Reportes() {
       XLSX.utils.book_append_sheet(wb, ws, safeSheetName(nombre))
     }
 
+    const stamp = mode === 'dia' ? fecha : `${desde}_${hasta}`
+    const dateKey = 'last_state_change_at'
+
     if (exportFormat === 'xlsx') {
       const wb = XLSX.utils.book_new()
-      addSheetFixed(wb, SHEET_TITLES.recibidos, recibidos, 'received_at')
-      addSheetFixed(wb, SHEET_TITLES.entregados, entregados, 'delivered_at')
-      addSheetFixed(wb, SHEET_TITLES.devoluciones, devoluciones, 'returned_at')
-      addSheetFixed(wb, SHEET_TITLES.push, push, 'last_state_change_at')
-      addSheetFixed(wb, SHEET_TITLES.almacenaje, almacenaje, 'last_state_change_at')
-      const stamp = mode === 'dia' ? fecha : `${desde}_${hasta}`
-      XLSX.writeFile(wb, `reporte_${stamp}.xlsx`, { compression: true })
+      addSheetFixed(wb, SHEET_TITLES.ENTREGADO_A_TRANSPORTISTA_LOCAL, stEntregadoTL, dateKey)
+      addSheetFixed(wb, SHEET_TITLES.NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE, stNoEntregado, dateKey)
+      addSheetFixed(wb, SHEET_TITLES.ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO, stEntregado2do, dateKey)
+      addSheetFixed(wb, SHEET_TITLES.NO_ENTREGABLE, stNoEntregable, dateKey)
+      addSheetFixed(wb, SHEET_TITLES.EN_INVENTARIO, stInventario, dateKey)
+      XLSX.writeFile(wb, `reporte_estados_${stamp}.xlsx`, { compression: true })
       return
     }
 
     const all = [
-      ...projectRows(recibidos, 'received_at'),
-      ...projectRows(entregados, 'delivered_at'),
-      ...projectRows(devoluciones, 'returned_at'),
-      ...projectRows(push, 'last_state_change_at'),
-      ...projectRows(almacenaje, 'last_state_change_at'),
+      ...projectRows(stEntregadoTL, dateKey),
+      ...projectRows(stNoEntregado, dateKey),
+      ...projectRows(stEntregado2do, dateKey),
+      ...projectRows(stNoEntregable, dateKey),
+      ...projectRows(stInventario, dateKey),
     ]
     const headers = FIXED_KEYS.map(k => FIXED_HEADERS[k])
     const rows = all.map(d => Object.fromEntries(FIXED_KEYS.map(k => [FIXED_HEADERS[k], d[k]])))
     const ws = XLSX.utils.json_to_sheet(rows, { header: headers })
     const csv = XLSX.utils.sheet_to_csv(ws)
     const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csv], { type: 'text/csv;charset=utf-8;' })
-    const stamp = mode === 'dia' ? fecha : `${desde}_${hasta}`
-    downloadBlob(blob, `reporte_${stamp}.csv`)
+    downloadBlob(blob, `reporte_estados_${stamp}.csv`)
   }
 
   const kpi = [
-    { title: 'Recibidos', value: recibidos.length },
-    { title: 'Entregados', value: entregados.length },
-    { title: 'No entregables', value: devoluciones.length },
-    { title: 'Push', value: push.length },
-    { title: 'Almacenaje', value: almacenaje.length },
+    { title: 'Entregado TL', value: stEntregadoTL.length },
+    { title: 'No entregado', value: stNoEntregado.length },
+    { title: 'Entregado TL 2do', value: stEntregado2do.length },
+    { title: 'No entregable', value: stNoEntregable.length },
+    { title: 'En inventario', value: stInventario.length },
   ]
 
   return (
@@ -284,34 +308,34 @@ export default function Reportes() {
       </div>
 
       <section style={{ marginTop: 8 }}>
-        <h4>Recibidos {mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)}</h4>
-        <DataTable rows={recibidos} dateKey="received_at" />
+        <h4>Entregado a transportista local {mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)}</h4>
+        <DataTable rows={stEntregadoTL} dateKey="last_state_change_at" />
       </section>
 
       <section style={{ marginTop: 16 }}>
-        <h4>Entregados {mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)}</h4>
-        <DataTable rows={entregados} dateKey="delivered_at" />
+        <h4>No entregado - Consignatario no disponible {mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)}</h4>
+        <DataTable rows={stNoEntregado} dateKey="last_state_change_at" />
       </section>
 
       <section style={{ marginTop: 16 }}>
-        <h4>No entregables {mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)}</h4>
-        <DataTable rows={devoluciones} dateKey="returned_at" />
+        <h4>Entregado a transportista local - 2do intento {mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)}</h4>
+        <DataTable rows={stEntregado2do} dateKey="last_state_change_at" />
       </section>
 
       <section style={{ marginTop: 16 }}>
-        <h4>Push {mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)}</h4>
-        <DataTable rows={push} dateKey="last_state_change_at" />
+        <h4>No entregable - Retornado a oficina local {mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)}</h4>
+        <DataTable rows={stNoEntregable} dateKey="last_state_change_at" />
       </section>
 
       <section style={{ marginTop: 16 }}>
-        <h4>Almacenaje {mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)}</h4>
-        <DataTable rows={almacenaje} dateKey="last_state_change_at" />
+        <h4>En inventario {mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)}</h4>
+        <DataTable rows={stInventario} dateKey="last_state_change_at" />
       </section>
     </div>
   )
 
   function totalFilas() {
-    return recibidos.length + entregados.length + devoluciones.length + push.length + almacenaje.length
+    return stEntregadoTL.length + stNoEntregado.length + stEntregado2do.length + stNoEntregable.length + stInventario.length
   }
 }
 
@@ -347,11 +371,11 @@ function rangoLabel(desde, hasta) {
 function DataTable({ rows, dateKey }) {
   const data = (rows || []).map(r => ({
     marchamo: r?.marchamo ?? '-',
-    mueble: r?.distrito_nombre ?? '-',            // ✅ Distrito
+    mueble: r?.distrito_nombre ?? '-',
     tracking: r?.tracking_code ?? '-',
     nombre: r?.recipient_name ?? '-',
     descripcion: r?.content_description ?? '-',
-    estado: labelEstado(r?.estado ?? '-'),        // ✅ nombre correcto
+    estado: labelEstado(r?.estado ?? '-'),
     devolucion_subtipo: (String(r?.estado ?? '').toUpperCase() === 'NO_ENTREGABLE')
       ? (r?.devolucion_subtipo ?? '-')
       : '-',

@@ -257,7 +257,7 @@ export default function Dashboard() {
       {summary && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 12 }}>
           <Kpi title="Paquetes totales" value={summary.totales?.paquetes ?? summary.totalPaquetes ?? 0} />
-          <Kpi title="No entregados actuales" value={summary.inventarioActual ?? 0} />
+          <Kpi title="En inventario" value={summary.inventarioActual ?? 0} />
         </div>
       )}
 

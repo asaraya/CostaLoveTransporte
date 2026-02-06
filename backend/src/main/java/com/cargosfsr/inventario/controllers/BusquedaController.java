@@ -30,15 +30,16 @@ public class BusquedaController {
 
     /**
      * estado:
-     * NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE (default) |
-     * ENTREGADO_A_TRANSPORTISTA_LOCAL |
-     * ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO |
+     * EN_INVENTARIO (default) =
+     *   ENTREGADO_A_TRANSPORTISTA_LOCAL |
+     *   NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE |
+     *   ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO |
      * NO_ENTREGABLE |
      * TODOS
      */
     @GetMapping("/inventario")
     public List<Map<String, Object>> inventario(
-            @RequestParam(name = "estado", defaultValue = "NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE") String estado,
+            @RequestParam(name = "estado", defaultValue = "EN_INVENTARIO") String estado,
             @RequestParam(name = "limit", defaultValue = "20") int limit,
             @RequestParam(name = "offset", defaultValue = "0") int offset) {
         return consultas.inventarioPaginado(estado, limit, offset);
@@ -46,7 +47,7 @@ public class BusquedaController {
 
     @GetMapping("/inventario/count")
     public Map<String, Object> inventarioCount(
-            @RequestParam(name = "estado", defaultValue = "NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE") String estado) {
+            @RequestParam(name = "estado", defaultValue = "EN_INVENTARIO") String estado) {
         long total = consultas.countInventario(estado);
         return Collections.singletonMap("total", total);
     }

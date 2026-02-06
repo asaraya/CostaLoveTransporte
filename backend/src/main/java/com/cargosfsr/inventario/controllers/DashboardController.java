@@ -35,7 +35,11 @@ public class DashboardController {
         String dFinExcl = d.plusDays(1) + " 00:00:00";
 
         int totalPaquetes    = count("SELECT COUNT(*) FROM paquetes");
-        int inventarioActual = count("SELECT COUNT(*) FROM paquetes WHERE estado='NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'");
+        // En inventario = cualquier paquete que NO sea NO_ENTREGABLE
+        int inventarioActual = count(
+                "SELECT COUNT(*) FROM paquetes WHERE estado IN (" +
+                        "'ENTREGADO_A_TRANSPORTISTA_LOCAL','NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE','ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'" +
+                        ")");
 
         int entregadosHoy = count(
             "SELECT COUNT(*) FROM paquetes " +
@@ -106,7 +110,11 @@ public class DashboardController {
         String sql = """
             SELECT v.distrito_nombre AS distrito, COUNT(*) AS cantidad
               FROM vw_paquete_resumen v
-             WHERE v.estado='NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'
+             WHERE v.estado IN (
+               'ENTREGADO_A_TRANSPORTISTA_LOCAL',
+               'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
+               'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'
+             )
              GROUP BY v.distrito_nombre
              ORDER BY cantidad DESC, distrito ASC
              LIMIT ?
