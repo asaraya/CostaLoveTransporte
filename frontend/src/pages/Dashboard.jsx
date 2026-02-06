@@ -290,7 +290,9 @@ export default function Dashboard() {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
         <div>
-          <h4>Distritos con “No entregado - Consignatario no disponible” (de mayor a menor)</h4>
+          {/* ✅ CAMBIO PEDIDO: título */}
+          <h4>Paquetes por distrito</h4>
+
           <table border="1" cellPadding="6" width="100%">
             <thead><tr><th>Distrito</th><th>Cantidad</th></tr></thead>
             <tbody>
