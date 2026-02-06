@@ -60,6 +60,7 @@ const SEARCH_TYPES = [
   { key: 'direccion', label: 'Dirección' },
   { key: 'distrito',  label: 'Distrito' },
   { key: 'vigencia',  label: 'Vigencia' },
+  { key: 'aviso',     label: 'Aviso' },
 ]
 
 // ✅ Estados (códigos) -> nombres EXACTOS que pediste + orden correcto
@@ -83,6 +84,13 @@ const DEV_SUBS = [
 ]
 
 const DEV_SUB_LABEL = Object.fromEntries(DEV_SUBS.map(x => [x.key, x.label]))
+
+// === Avisos ===
+const AVISO_TABS = [
+  { key: 'INTENTO_1',    label: 'Actualizar a intento 1', minDias: 3 },
+  { key: 'INTENTO_2',    label: 'Actualizar a intento 2', minDias: 4 },
+  { key: 'NO_ENTREGABLE',label: 'Actualizar a no entregables', minDias: 7 },
+]
 
 /* Helper de TZ local (CR) para display */
 const fmtDateTime = (iso) => {
@@ -122,6 +130,7 @@ const autoWidth = (ws, rows, headers) => {
   ws['!cols'] = wch.map(n => ({ wch: n + 1 }))
 }
 const sanitize = (s) => (s || '').replace(/[\\/:*?"<>|]+/g, '_').trim()
+const sheetNameSafe = (s) => sanitize(s).slice(0, 31)
 
 // --- parsea "15" o "15-20" (con o sin espacios) ---
 function parseVigenciaInput(raw) {
@@ -251,6 +260,9 @@ export default function Inventario() {
   // Subfiltro devolución
   const [devSub, setDevSub] = useState('TODOS')
 
+  // Avisos
+  const [avisoTab, setAvisoTab] = useState('INTENTO_1')
+
   // Total global
   const [totalCount, setTotalCount] = useState(0)
 
@@ -265,11 +277,14 @@ export default function Inventario() {
       const effEstado     = overrides.estadoTodos ?? estadoTodos
       const effDevSub     = overrides.devSub ?? devSub
       const q             = overrides.query ?? query
+      const effAvisoTab   = overrides.avisoTab ?? avisoTab
 
       let total = 0
 
-      if (effSearchType === 'todos') {
-        // Para NO_ENTREGABLE con subtipo usamos reportes/devolucion (para contar bien)
+      if (effSearchType === 'aviso') {
+        const { data } = await api.get('/busqueda/avisos/count', { params: { tipo: effAvisoTab } })
+        total = data?.total ?? 0
+      } else if (effSearchType === 'todos') {
         if (effEstado === 'NO_ENTREGABLE') {
           const params = {}
           if (effDevSub !== 'TODOS') params.subtipo = effDevSub
@@ -336,12 +351,17 @@ export default function Inventario() {
       const effEstado     = overrides.estadoTodos ?? estadoTodos
       const effDevSub     = overrides.devSub ?? devSub
       const effQuery      = overrides.query ?? query
+      const effAvisoTab   = overrides.avisoTab ?? avisoTab
+
       const off = typeof customOffset === 'number' ? customOffset : (overrides.offset ?? offset)
 
       let data = []
 
-      if (effSearchType === 'todos') {
-        // NO_ENTREGABLE con subtipo: usamos /reportes/devolucion y paginamos en cliente
+      if (effSearchType === 'aviso') {
+        const params = { tipo: effAvisoTab, limit: pageSize, offset: off }
+        const { data: resp } = await api.get('/busqueda/avisos', { params })
+        data = normalizeRows(Array.isArray(resp) ? resp : [])
+      } else if (effSearchType === 'todos') {
         if (effEstado === 'NO_ENTREGABLE') {
           const params = {}
           if (effDevSub !== 'TODOS') params.subtipo = effDevSub
@@ -383,7 +403,14 @@ export default function Inventario() {
 
       setRows(Array.isArray(data) ? data : [])
       setColumns(FIXED_COLUMNS)
-      await fetchTotalCount({ searchType: effSearchType, estadoTodos: effEstado, devSub: effDevSub, query: effQuery })
+
+      await fetchTotalCount({
+        searchType: effSearchType,
+        estadoTodos: effEstado,
+        devSub: effDevSub,
+        query: effQuery,
+        avisoTab: effAvisoTab,
+      })
     } catch (e) {
       toastErr(e)
     } finally {
@@ -410,7 +437,9 @@ export default function Inventario() {
     setSearchType(key)
     setOffset(0)
     if (switching) setQuery('')
+
     if (key === 'todos') buscar(0, { searchType: 'todos', estadoTodos, devSub })
+    if (key === 'aviso') buscar(0, { searchType: 'aviso', avisoTab })
   }
 
   const handleEstadoClick = (estado) => {
@@ -424,6 +453,12 @@ export default function Inventario() {
     setDevSub(sub)
     setOffset(0)
     buscar(0, { searchType: 'todos', estadoTodos: 'NO_ENTREGABLE', devSub: sub })
+  }
+
+  const handleAvisoTabClick = (tabKey) => {
+    setAvisoTab(tabKey)
+    setOffset(0)
+    buscar(0, { searchType: 'aviso', avisoTab: tabKey })
   }
 
   const onEnter = (e) => {
@@ -448,13 +483,8 @@ export default function Inventario() {
       columns.forEach(c => {
         let val = r[c]
 
-        if (c === 'estado') {
-          val = fmtEstado(r['estado'])
-        }
-
-        if (c === 'devolucion_subtipo') {
-          val = fmtDevSub(r['estado'], r['devolucion_subtipo'])
-        }
+        if (c === 'estado') val = fmtEstado(r['estado'])
+        if (c === 'devolucion_subtipo') val = fmtDevSub(r['estado'], r['devolucion_subtipo'])
 
         if (['responsable_consolidado','cambio_en_sistema_por','observaciones'].includes(c)
             && (val == null || String(val).trim() === '')) val = '-'
@@ -471,6 +501,69 @@ export default function Inventario() {
 
     const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')
     XLSX.writeFile(wb, `reporte_marchamo_${sanitize(marchamo)}_${stamp}.xlsx`, { compression: true })
+  }
+
+  const descargarReporteAvisos = async () => {
+    if (searchType !== 'aviso') return
+
+    try {
+      setLoading(true)
+
+      // Traemos TODO por tipo (un solo request por hoja).
+      // Si necesitás, podés subir/bajar este límite.
+      const fetchAll = async (tipo) => {
+        const { data } = await api.get('/busqueda/avisos', { params: { tipo, limit: 200000, offset: 0 } })
+        return normalizeRows(Array.isArray(data) ? data : [])
+      }
+
+      const [rowsI1, rowsI2, rowsNE] = await Promise.all([
+        fetchAll('INTENTO_1'),
+        fetchAll('INTENTO_2'),
+        fetchAll('NO_ENTREGABLE'),
+      ])
+
+      const makeSheetData = (rowsList) => {
+        const cols = FIXED_COLUMNS
+        return rowsList.map(r => {
+          const obj = {}
+          cols.forEach(c => {
+            let val = r[c]
+
+            if (c === 'estado') val = fmtEstado(r['estado'])
+            if (c === 'devolucion_subtipo') val = fmtDevSub(r['estado'], r['devolucion_subtipo'])
+
+            if (['responsable_consolidado','cambio_en_sistema_por','observaciones'].includes(c)
+                && (val == null || String(val).trim() === '')) val = '-'
+
+            obj[prettyHeader(c)] = fmtCell(val)
+          })
+          return obj
+        })
+      }
+
+      const wb = XLSX.utils.book_new()
+
+      const sheets = [
+        { label: 'Actualizar a intento 1', rows: rowsI1 },
+        { label: 'Actualizar a intento 2', rows: rowsI2 },
+        { label: 'Actualizar a no entregables', rows: rowsNE },
+      ]
+
+      for (const s of sheets) {
+        const data = makeSheetData(s.rows)
+        const headers = FIXED_COLUMNS.map(c => prettyHeader(c))
+        const ws = XLSX.utils.json_to_sheet(data, { header: headers })
+        autoWidth(ws, data, headers)
+        XLSX.utils.book_append_sheet(wb, ws, sheetNameSafe(s.label))
+      }
+
+      const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')
+      XLSX.writeFile(wb, `reporte_avisos_${stamp}.xlsx`, { compression: true })
+    } catch (e) {
+      toastErr(e)
+    } finally {
+      setLoading(false)
+    }
   }
 
   // ¿Hay más páginas?
@@ -512,6 +605,32 @@ export default function Inventario() {
 
       {/* Controles específicos */}
       <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center', marginBottom:12 }}>
+        {searchType === 'aviso' && (
+          <>
+            <label>Tipo de aviso:</label>
+            {AVISO_TABS.map(t => (
+              <button
+                key={t.key}
+                className={`toggle ${avisoTab === t.key ? 'is-selected' : ''}`}
+                aria-pressed={avisoTab === t.key}
+                onClick={() => handleAvisoTabClick(t.key)}
+                title={`Muestra paquetes con ${t.minDias}+ días desde recepción pendientes de este cambio`}
+              >
+                {t.label}
+              </button>
+            ))}
+
+            <button
+              onClick={descargarReporteAvisos}
+              disabled={loading}
+              style={{ marginLeft: 8 }}
+              title="Descarga un Excel con 3 hojas (una por tipo de aviso)"
+            >
+              Descargar reporte de avisos
+            </button>
+          </>
+        )}
+
         {searchType === 'todos' && (
           <>
             <label>Estado a listar:</label>
@@ -657,13 +776,8 @@ export default function Inventario() {
                 {FIXED_COLUMNS.map(c => {
                   let rawVal = r[c]
 
-                  if (c === 'estado') {
-                    rawVal = fmtEstado(r['estado'])
-                  }
-
-                  if (c === 'devolucion_subtipo') {
-                    rawVal = fmtDevSub(r['estado'], r['devolucion_subtipo'])
-                  }
+                  if (c === 'estado') rawVal = fmtEstado(r['estado'])
+                  if (c === 'devolucion_subtipo') rawVal = fmtDevSub(r['estado'], r['devolucion_subtipo'])
 
                   if (['responsable_consolidado','cambio_en_sistema_por','observaciones'].includes(c)
                       && (rawVal == null || String(rawVal).trim() === '')) rawVal = '-'
@@ -694,7 +808,7 @@ export default function Inventario() {
       </div>
 
       {/* Paginación */}
-      {['todos','vigencia'].includes(searchType) && (
+      {['todos','vigencia','aviso'].includes(searchType) && (
         <div style={{ marginTop: 10, display:'flex', gap:8, alignItems:'center' }}>
           <span style={{ opacity:.75 }}>
             Mostrando {Math.min(totalCount, offset + rows.length)} / {totalCount}
