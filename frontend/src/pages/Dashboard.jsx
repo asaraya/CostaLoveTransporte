@@ -9,21 +9,36 @@ const toCRISO = (yyyyMmDd, hh = '00', mm = '00', ss = '00') => {
   return `${yyyyMmDd}T${hh}:${mm}:${ss}-06:00`
 }
 
+// Estado que tu UI llama “inventario” en este sistema (según tu código actual)
+const INVENTARIO_STATE = 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'
+
+// Normaliza nombre de distrito desde distintas formas posibles del backend
+const pickDistritoNombre = (r) =>
+  r?.distrito ??
+  r?.distrito_nombre ??
+  r?.nombre ??
+  r?.ubicacion ??              // fallback legacy
+  r?.ubicacion_codigo ??       // fallback legacy
+  '-'
+
 export default function Dashboard() {
   const [fecha, setFecha] = useState(() =>
     new Intl.DateTimeFormat('en-CA', { timeZone: CR_TZ }).format(new Date())
   )
 
   const [summary, setSummary] = useState(null)
-  const [topUbic, setTopUbic] = useState([])
+
+  // === Distritos con inventario ===
+  const [topDistritos, setTopDistritos] = useState([])
+
   const [ultimosRec, setUltimosRec] = useState([])
   const [ultimosMov, setUltimosMov] = useState([])
   const [loading, setLoading] = useState(false)
 
-  // Modal
-  const [ubicModal, setUbicModal] = useState({
+  // Modal: paquetes por distrito (solo INVENTARIO_STATE)
+  const [distModal, setDistModal] = useState({
     open: false,
-    ubicacion: '',
+    distrito: '',
     rows: [],
     loading: false,
     error: null,
@@ -37,24 +52,69 @@ export default function Dashboard() {
   const [pfData, setPfData] = useState({ recibidos: [], entregados: [], inventario: [] })
   const [pfLoading, setPfLoading] = useState(false)
 
-  // Matriz mensual
-  const [mesResumen, setMesResumen] = useState(() => {
-    const d = new Date()
-    const y = d.getFullYear()
-    const m = String(d.getMonth() + 1).padStart(2, '0')
-    return `${y}-${m}`
-  })
-  const [matrizMes, setMatrizMes] = useState([])
-  const [loadingMes, setLoadingMes] = useState(false)
-
-  const cargarTopUbicaciones = async () => {
+  // ===========================
+  //   CARGA: DISTRITOS (BD)
+  // ===========================
+  const cargarDistritosConInventario = async () => {
     try {
-      const { data } = await api.get('/dashboard/top-ubicaciones', { params: { limit: 100000 } })
-      const ubicAll = Array.isArray(data) ? [...data] : []
-      ubicAll.sort((a, b) => (b?.cantidad ?? 0) - (a?.cantidad ?? 0))
-      setTopUbic(ubicAll)
+      // 1) Conteos por distrito (ideal: /dashboard/top-distritos; fallback: /dashboard/top-ubicaciones)
+      let conteos = []
+      try {
+        const { data } = await api.get('/dashboard/top-distritos', { params: { limit: 100000 } })
+        conteos = Array.isArray(data) ? data : []
+      } catch {
+        const { data } = await api.get('/dashboard/top-ubicaciones', { params: { limit: 100000 } })
+        conteos = Array.isArray(data) ? data : []
+      }
+
+      // Map conteos: nombreDistrito -> cantidad
+      const mapConteos = new Map()
+      for (const r of conteos) {
+        const nombre = pickDistritoNombre(r)
+        const cantidad = Number(r?.cantidad ?? 0) || 0
+        if (nombre && nombre !== '-') mapConteos.set(nombre, cantidad)
+      }
+
+      // 2) Catálogo de distritos desde BD (ideal: /distritos; fallback: /distritos/activos)
+      //    Si existe, mostramos TODOS los distritos de BD (aunque tengan 0) y ordenamos desc por cantidad.
+      let catalogo = null
+      try {
+        const { data } = await api.get('/distritos')
+        catalogo = Array.isArray(data) ? data : null
+      } catch {
+        try {
+          const { data } = await api.get('/distritos/activos')
+          catalogo = Array.isArray(data) ? data : null
+        } catch {
+          catalogo = null
+        }
+      }
+
+      let rows = []
+
+      if (catalogo && catalogo.length) {
+        // soporta: [{id,nombre,activo}, ...] o ["La colonia", ...]
+        const nombres = catalogo
+          .map((d) => (typeof d === 'string' ? d : d?.nombre))
+          .filter(Boolean)
+
+        rows = nombres.map((nombre) => ({
+          distrito: nombre,
+          cantidad: mapConteos.get(nombre) ?? 0,
+        }))
+      } else {
+        // si no hay catálogo, usamos lo que venga del endpoint de conteos
+        rows = conteos.map((r) => ({
+          distrito: pickDistritoNombre(r),
+          cantidad: Number(r?.cantidad ?? 0) || 0,
+        }))
+      }
+
+      rows.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0))
+      setTopDistritos(rows)
     } catch (e) {
-      alert(e?.response?.data?.message || e?.message || 'Error')
+      alert(e?.response?.data?.message || e?.message || 'Error cargando distritos')
+      setTopDistritos([])
     }
   }
 
@@ -87,19 +147,13 @@ export default function Dashboard() {
   const cargarTodo = async () => {
     setLoading(true)
     try {
-      const [s, u, r, m] = await Promise.all([
+      const [s, r, m] = await Promise.all([
         api.get('/dashboard/summary', { params: { fecha } }),
-        api.get('/dashboard/top-ubicaciones', { params: { limit: 100000 } }),
         api.get('/dashboard/ultimos-recibidos', { params: { limit: 10, fecha } }),
         api.get('/dashboard/ultimos-movimientos', { params: { fecha, limit: 100000 } }),
       ])
 
       setSummary(s.data)
-
-      const ubicAll = Array.isArray(u.data) ? [...u.data] : []
-      ubicAll.sort((a, b) => (b?.cantidad ?? 0) - (a?.cantidad ?? 0))
-      setTopUbic(ubicAll)
-
       setUltimosRec(Array.isArray(r.data) ? r.data : [])
 
       const movSrc = Array.isArray(m.data) ? m.data : []
@@ -109,6 +163,8 @@ export default function Dashboard() {
         return db - da
       })
       setUltimosMov(movHoy)
+
+      await cargarDistritosConInventario()
     } catch (e) {
       alert(e?.response?.data?.message || e?.message || 'Error')
     } finally {
@@ -116,24 +172,25 @@ export default function Dashboard() {
     }
   }
 
-  useEffect(() => { cargarTopUbicaciones() }, [])
+  // Cargas iniciales
+  useEffect(() => { cargarDistritosConInventario() }, [])
   useEffect(() => { cargarFecha() }, [fecha])
 
-  // Modal: ahora asumimos que “ubicacion” representa el distrito (según backend nuevo)
-  const openUbicModal = async (ubicacion) => {
-    setUbicModal({ open: true, ubicacion, rows: [], loading: true, error: null })
+  // Modal: paquetes por distrito (solo INVENTARIO_STATE)
+  const openDistritoModal = async (distrito) => {
+    setDistModal({ open: true, distrito, rows: [], loading: true, error: null })
     try {
-      const { data } = await api.get(`/busqueda/distrito/${encodeURIComponent(ubicacion)}`, {
-        params: { estado: 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' }
+      const { data } = await api.get(`/busqueda/distrito/${encodeURIComponent(distrito)}`, {
+        params: { estado: INVENTARIO_STATE }
       })
       const arr = Array.isArray(data) ? data : []
       const rows = arr
-        .filter(r => String(r?.estado ?? '').toUpperCase() === 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE')
+        .filter(r => String(r?.estado ?? '').toUpperCase() === INVENTARIO_STATE)
         .sort((a, b) => new Date(b?.received_at ?? 0).getTime() - new Date(a?.received_at ?? 0).getTime())
 
-      setUbicModal(prev => ({ ...prev, rows, loading: false }))
+      setDistModal(prev => ({ ...prev, rows, loading: false }))
     } catch (e) {
-      setUbicModal(prev => ({
+      setDistModal(prev => ({
         ...prev,
         loading: false,
         error: e?.response?.data?.message || e?.message || 'Error cargando paquetes'
@@ -141,19 +198,21 @@ export default function Dashboard() {
     }
   }
 
-  const closeUbicModal = () => setUbicModal(prev => ({ ...prev, open: false }))
+  const closeDistritoModal = () => setDistModal(prev => ({ ...prev, open: false }))
 
+  // Cerrar con ESC
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') closeUbicModal() }
-    if (ubicModal.open) window.addEventListener('keydown', onKey)
+    const onKey = (e) => { if (e.key === 'Escape') closeDistritoModal() }
+    if (distModal.open) window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [ubicModal.open])
+  }, [distModal.open])
 
+  // Fecha lógica del movimiento según el estado destino (fechas REALES si existen)
   function movFechaOficial(r) {
     if (!r) return null
     const to = String(r.estado_to ?? r.estadoTo ?? '').toUpperCase()
 
-    if (to === 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' && r.received_at) return r.received_at
+    if (to === INVENTARIO_STATE && r.received_at) return r.received_at
     if ((to === 'ENTREGADO_A_TRANSPORTISTA_LOCAL' || to === 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO') && r.delivered_at) return r.delivered_at
     if (to === 'NO_ENTREGABLE' && r.returned_at) return r.returned_at
 
@@ -180,7 +239,7 @@ export default function Dashboard() {
       })
 
       const inventario = recibidos.filter(r =>
-        String(r?.estado ?? '').toUpperCase() === 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'
+        String(r?.estado ?? '').toUpperCase() === INVENTARIO_STATE
       )
 
       setPfData({ recibidos, entregados, inventario })
@@ -199,86 +258,6 @@ export default function Dashboard() {
 
   const currentPFDateKey = 'received_at'
 
-  // Matriz mensual usando /reportes/diario?flat=true (backend nuevo: fuera_de_ruta/vencidos/dos_intentos)
-  const cargarMatrizMes = async () => {
-    if (!mesResumen) return
-    setLoadingMes(true)
-    try {
-      const [yStr, mStr] = mesResumen.split('-')
-      const year = parseInt(yStr, 10)
-      const month = parseInt(mStr, 10)
-      if (!year || !month) { setMatrizMes([]); return }
-
-      const daysInMonth = new Date(year, month, 0).getDate()
-
-      const requests = []
-      for (let day = 1; day <= daysInMonth; day++) {
-        const dStr = String(day).padStart(2, '0')
-        const fechaDia = `${yStr}-${mStr}-${dStr}`
-
-        requests.push(
-          api.get('/reportes/diario', { params: { fecha: fechaDia, flat: true } })
-            .then(res => ({ fecha: fechaDia, raw: res.data }))
-            .catch(() => ({ fecha: fechaDia, raw: null }))
-        )
-      }
-
-      const results = await Promise.all(requests)
-
-      const normalize = (raw) => {
-        if (!raw) return {}
-
-        const unwrapRow = (value) => {
-          if (!value) return null
-          if (Array.isArray(value)) return value[0] ?? null
-          if (typeof value === 'object') {
-            const rsKey = Object.keys(value).find(k => /^#result-set-\d+$/i.test(k))
-            if (rsKey && Array.isArray(value[rsKey])) return value[rsKey][0] ?? null
-          }
-          return value
-        }
-
-        const data = unwrapRow(raw) || {}
-
-        const toNumber = (v) => {
-          if (v === null || v === undefined || v === '') return null
-          const n = Number(v)
-          return Number.isFinite(n) ? n : v
-        }
-
-        const getField = (...keys) => {
-          for (const k of keys) {
-            if (Object.prototype.hasOwnProperty.call(data, k) && data[k] != null) return toNumber(data[k])
-          }
-          return null
-        }
-
-        return {
-          inventario:     getField('inventario', 'INVENTARIO'),
-          recibido:       getField('recibido', 'RECIBIDO', 'recibidos'),
-          entregado:      getField('entregado', 'ENTREGADO', 'entregados'),
-          no_entregable:  getField('no_entregable', 'NO_ENTREGABLE'),
-          fuera_de_ruta:  getField('fuera_de_ruta', 'FUERA_DE_RUTA'),
-          vencidos:       getField('vencidos', 'VENCIDOS'),
-          dos_intentos:   getField('dos_intentos', 'DOS_INTENTOS'),
-          total:          getField('total', 'TOTAL'),
-        }
-      }
-
-      const rows = results.map(({ fecha, raw }) => ({ fecha, ...normalize(raw) }))
-      setMatrizMes(rows)
-    } catch (e) {
-      alert(e?.response?.data?.message || e?.message || 'Error cargando matriz mensual')
-      setMatrizMes([])
-    } finally {
-      setLoadingMes(false)
-    }
-  }
-
-  useEffect(() => { cargarMatrizMes() }, [mesResumen])
-
-  const fmtCell = (v) => (v === null || v === undefined || v === '' ? '-' : v)
-
   return (
     <div>
       <h3>Dashboard</h3>
@@ -287,7 +266,9 @@ export default function Dashboard() {
         <label>Fecha:
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} />
         </label>
-        <button onClick={cargarTodo} disabled={loading}>{loading ? 'Actualizando…' : 'Actualizar'}</button>
+        <button onClick={cargarTodo} disabled={loading}>
+          {loading ? 'Actualizando…' : 'Actualizar'}
+        </button>
       </div>
 
       {summary && (
@@ -301,7 +282,10 @@ export default function Dashboard() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 12 }}>
           <Kpi title={`Recibidos ${summary.fecha ?? fecha}`} value={summary.hoy?.recibidos ?? 0} />
           <Kpi title={`Entregados ${summary.fecha ?? fecha}`} value={summary.hoy?.entregados ?? 0} />
-          <Kpi title={`No entregables ${summary.fecha ?? fecha}`} value={summary.hoy?.noEntregable ?? summary.hoy?.no_entregable ?? summary.hoy?.devoluciones ?? 0} />
+          <Kpi
+            title={`No entregables ${summary.fecha ?? fecha}`}
+            value={summary.hoy?.noEntregable ?? summary.hoy?.no_entregable ?? summary.hoy?.devoluciones ?? 0}
+          />
         </div>
       )}
 
@@ -325,21 +309,24 @@ export default function Dashboard() {
           <table border="1" cellPadding="6" width="100%">
             <thead><tr><th>Distrito</th><th>Cantidad</th></tr></thead>
             <tbody>
-              {topUbic.map((r, i) => (
+              {topDistritos.map((r, i) => (
                 <tr key={i}>
                   <td>
                     <button
-                      onClick={() => openUbicModal(r.ubicacion)}
-                      style={{ background: 'none', border: 'none', color: '#0b66c3', textDecoration: 'underline', padding: 0, cursor: 'pointer' }}
+                      onClick={() => openDistritoModal(r.distrito)}
+                      style={{
+                        background: 'none', border: 'none', color: '#0b66c3',
+                        textDecoration: 'underline', padding: 0, cursor: 'pointer'
+                      }}
                       title="Ver paquetes en este distrito"
                     >
-                      {r.ubicacion}
+                      {r.distrito}
                     </button>
                   </td>
                   <td>{r.cantidad}</td>
                 </tr>
               ))}
-              {!topUbic.length && (
+              {!topDistritos.length && (
                 <tr><td colSpan={2} style={{ textAlign: 'center', opacity: .7 }}>Sin datos</td></tr>
               )}
             </tbody>
@@ -361,7 +348,7 @@ export default function Dashboard() {
             </thead>
             <tbody>
               {ultimosRec.map((r) => (
-                <tr key={r.id}>
+                <tr key={r.id ?? `${r.tracking_code}-${r.received_at}`}>
                   <td>{r.tracking_code}</td>
                   <td>{r.marchamo}</td>
                   <td>{r.distrito_nombre ?? '-'}</td>
@@ -387,6 +374,7 @@ export default function Dashboard() {
           <button onClick={cargarPorFecha} disabled={pfLoading || !fechaPF}>
             {pfLoading ? 'Cargando…' : 'Ver'}
           </button>
+
           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
             <button onClick={() => setTabPF('RECIBIDOS')} style={tabBtnStyle(tabPF === 'RECIBIDOS')}>
               Recibidos ({pfData.recibidos.length})
@@ -438,59 +426,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div style={{ marginTop: 16 }}>
-        <h4>Resumen mensual (matriz tipo hoja)</h4>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
-          <label>Mes:
-            <input type="month" value={mesResumen} onChange={e => setMesResumen(e.target.value)} style={{ marginLeft: 4 }} />
-          </label>
-          <button onClick={cargarMatrizMes} disabled={loadingMes || !mesResumen}>
-            {loadingMes ? 'Cargando…' : 'Ver mes'}
-          </button>
-        </div>
-
-        <div style={{ border: '1px solid rgba(22,62,122,.15)', borderRadius: 8, padding: 8 }}>
-          <div style={{ maxHeight: 400, overflowY: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th style={th}>Fecha</th>
-                  <th style={th}>Inventario</th>
-                  <th style={th}>Recibido</th>
-                  <th style={th}>Entregado</th>
-                  <th style={th}>No entregable</th>
-                  <th style={th}>Fuera de ruta</th>
-                  <th style={th}>Vencidos</th>
-                  <th style={th}>Dos intentos</th>
-                  <th style={th}>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {matrizMes.length === 0 ? (
-                  <tr>
-                    <td colSpan={9} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>
-                      Sin datos para el mes seleccionado
-                    </td>
-                  </tr>
-                ) : matrizMes.map((r) => (
-                  <tr key={r.fecha} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
-                    <td style={td}>{r.fecha}</td>
-                    <td style={td}>{fmtCell(r.inventario)}</td>
-                    <td style={td}>{fmtCell(r.recibido)}</td>
-                    <td style={td}>{fmtCell(r.entregado)}</td>
-                    <td style={td}>{fmtCell(r.no_entregable)}</td>
-                    <td style={td}>{fmtCell(r.fuera_de_ruta)}</td>
-                    <td style={td}>{fmtCell(r.vencidos)}</td>
-                    <td style={td}>{fmtCell(r.dos_intentos)}</td>
-                    <td style={td}>{fmtCell(r.total)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
+      {/* Movimientos del día */}
       <div style={{ marginTop: 16 }}>
         <h4>Movimientos de estado del {fecha}</h4>
         <div style={{ maxHeight: 340, overflowY: 'auto' }}>
@@ -522,26 +458,30 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {ubicModal.open && (
+      {/* MODAL: Paquetes por distrito (solo INVENTARIO_STATE) */}
+      {distModal.open && (
         <div
-          onClick={closeUbicModal}
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+          onClick={closeDistritoModal}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+          }}
         >
           <div onClick={e => e.stopPropagation()} style={blueCard}>
-            <button onClick={closeUbicModal} aria-label="Cerrar" title="Cerrar" style={closeBtn}>×</button>
+            <button onClick={closeDistritoModal} aria-label="Cerrar" title="Cerrar" style={closeBtn}>×</button>
 
             <h4 style={{ margin: '0 0 10px', color: '#fff' }}>
-              Paquetes en: <span style={{ fontWeight: 800 }}>{ubicModal.ubicacion}</span>
+              Paquetes en: <span style={{ fontWeight: 800 }}>{distModal.distrito}</span>
               <span style={pill}>INVENTARIO</span>
             </h4>
 
-            {ubicModal.loading && <div style={{ padding: 8, color: '#e8f0ff' }}>Cargando paquetes…</div>}
-            {ubicModal.error && <div style={{ padding: 8, color: '#ffdde0' }}>{ubicModal.error}</div>}
+            {distModal.loading && <div style={{ padding: 8, color: '#e8f0ff' }}>Cargando paquetes…</div>}
+            {distModal.error && <div style={{ padding: 8, color: '#ffdde0' }}>{distModal.error}</div>}
 
-            {!ubicModal.loading && !ubicModal.error && (
+            {!distModal.loading && !distModal.error && (
               <>
                 <div style={{ marginBottom: 8, opacity: .9, color: '#e8f0ff' }}>
-                  Total (inventario): {ubicModal.rows.length}
+                  Total (inventario): {distModal.rows.length}
                 </div>
 
                 <div style={{ overflow: 'auto', maxHeight: '65vh', border: '1px solid rgba(255,255,255,.35)', borderRadius: 8, background: '#fff' }}>
@@ -556,7 +496,7 @@ export default function Dashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {ubicModal.rows.length ? ubicModal.rows.map((r, idx) => (
+                      {distModal.rows.length ? distModal.rows.map((r, idx) => (
                         <tr key={r.id ?? r.tracking_code ?? idx} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
                           <td style={td}>{r.tracking_code}</td>
                           <td style={td}>{r.marchamo}</td>
