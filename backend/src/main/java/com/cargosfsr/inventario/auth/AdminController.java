@@ -3,6 +3,7 @@ package com.cargosfsr.inventario.auth;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -29,15 +30,16 @@ public class AdminController {
 
     // ---------- Usuarios ----------
     @GetMapping("/users")
-    public List<Map<String,Object>> listUsers() {
+    public List<Map<String, Object>> listUsers() {
         return jdbc.queryForList(
-            "SELECT id, username, full_name, role, active, created_at FROM usuarios ORDER BY id DESC"
+            "SELECT id, username, full_name, role, active, created_at " +
+            "FROM usuarios ORDER BY id DESC"
         );
     }
 
     @PostMapping("/users")
-    public Map<String,Object> createUser(@RequestBody CreateUserReq req) {
-        String username = norm(req.username);
+    public Map<String, Object> createUser(@RequestBody CreateUserReq req) {
+        String username = normUsername(req.username);
         String fullName = req.fullName == null ? null : req.fullName.trim();
         String role     = (req.role == null || req.role.isBlank()) ? "USER" : req.role.trim().toUpperCase();
 
@@ -54,8 +56,8 @@ public class AdminController {
     }
 
     @DeleteMapping("/users/{username}")
-    public Map<String,Object> deleteUser(@PathVariable String username) {
-        String u = norm(username);
+    public Map<String, Object> deleteUser(@PathVariable String username) {
+        String u = normUsername(username);
         String role;
         try {
             role = jdbc.queryForObject("SELECT role FROM usuarios WHERE username=?", String.class, u);
@@ -69,57 +71,114 @@ public class AdminController {
         return Map.of("ok", rows > 0);
     }
 
-    // ---------- Muebles ----------
-    @PostMapping("/muebles")
-    public List<Map<String,Object>> agregarMueble(@RequestBody AddMuebleReq req) {
-        if (req.mueble == null || req.mueble <= 0) throw new IllegalArgumentException("Número de mueble inválido");
-        if (req.estanterias == null || req.estanterias <= 0) throw new IllegalArgumentException("Número de estanterías inválido");
-        return jdbc.queryForList("CALL sp_agregar_mueble(?,?)", req.mueble, req.estanterias);
+    // ---------- Distritos ----------
+    // POST /api/admin/distritos  { "nombre": "Roxana" }
+    @PostMapping("/distritos")
+    public Map<String, Object> addDistrito(@RequestBody AddDistritoReq req) {
+        String nombre = normDistrito(req.nombre);
+        if (!StringUtils.hasText(nombre) || nombre.length() > 100) {
+            throw new IllegalArgumentException("Nombre de distrito inválido");
+        }
+
+        // Si existe (activo o inactivo), lo manejamos:
+        try {
+            Map<String, Object> existing = jdbc.queryForMap(
+                "SELECT id, nombre, activo FROM distritos WHERE nombre = ? LIMIT 1",
+                nombre
+            );
+
+            boolean activo = toBool(existing.get("activo"));
+            if (activo) {
+                return Map.of("ok", false, "message", "El distrito ya existe", "nombre", existing.get("nombre"));
+            }
+
+            Long id = toLong(existing.get("id"));
+            int updated = jdbc.update("UPDATE distritos SET activo = 1 WHERE id = ?", id);
+            return Map.of(
+                "ok", updated > 0,
+                "reactivado", true,
+                "id", id,
+                "nombre", existing.get("nombre")
+            );
+
+        } catch (EmptyResultDataAccessException ex) {
+            // No existe, insertamos
+            try {
+                jdbc.update("INSERT INTO distritos (nombre) VALUES (?)", nombre);
+                Long id = jdbc.queryForObject(
+                    "SELECT id FROM distritos WHERE nombre=? LIMIT 1",
+                    Long.class,
+                    nombre
+                );
+                return Map.of("ok", true, "id", id, "nombre", nombre);
+            } catch (DuplicateKeyException dk) {
+                // Por collation/unique, por si entró una carrera
+                return Map.of("ok", false, "message", "El distrito ya existe", "nombre", nombre);
+            }
+        }
     }
 
-    // NUEVO: eliminar mueble + todas sus estanterías
-    // Mueve previamente los paquetes/sacos a la ubicación 'PENDIENTE' para no romper FKs.
-    @DeleteMapping("/muebles/{mueble}")
-    public Map<String,Object> eliminarMueble(@PathVariable Integer mueble) {
-        if (mueble == null || mueble <= 0) throw new IllegalArgumentException("Número de mueble inválido");
-
-        // id de la ubicación PENDIENTE (se crea si no existe)
-        Long pendId = jdbc.queryForObject("SELECT id FROM ubicacion WHERE codigo='PENDIENTE' LIMIT 1",
-                Long.class);
-        if (pendId == null) {
-            jdbc.update("INSERT INTO ubicacion(tipo, codigo, activo) VALUES ('MUEBLE','PENDIENTE',1)");
-            pendId = jdbc.queryForObject("SELECT id FROM ubicacion WHERE codigo='PENDIENTE' LIMIT 1",
-                    Long.class);
+    // DELETE /api/admin/distritos/{nombre}
+    // Nota: si hay paquetes asociados, NO se borra físicamente (FK), se desactiva (activo=0).
+    @DeleteMapping("/distritos/{nombre}")
+    public Map<String, Object> deleteDistrito(@PathVariable String nombre) {
+        String n = normDistrito(nombre);
+        if (!StringUtils.hasText(n) || n.length() > 100) {
+            throw new IllegalArgumentException("Nombre de distrito inválido");
         }
 
-        // ¿existen ubicaciones de ese mueble?
-        Integer exists = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM ubicacion WHERE tipo='MUEBLE' AND mueble_num=?",
-                Integer.class, mueble);
-        if (exists == null || exists == 0) {
-            return Map.of("ok", false, "message", "El mueble no existe");
+        Long id;
+        Integer activo;
+        String nombreDb;
+        try {
+            Map<String, Object> row = jdbc.queryForMap(
+                "SELECT id, nombre, activo FROM distritos WHERE nombre=? LIMIT 1",
+                n
+            );
+            id = toLong(row.get("id"));
+            activo = (row.get("activo") == null) ? 1 : Integer.valueOf(String.valueOf(row.get("activo")));
+            nombreDb = String.valueOf(row.get("nombre"));
+        } catch (EmptyResultDataAccessException ex) {
+            return Map.of("ok", false, "message", "Distrito no existe");
         }
 
-        // mover paquetes/sacos a 'PENDIENTE'
-        int movedPaq = jdbc.update(
-            "UPDATE paquetes SET ubicacion_id=? " +
-            "WHERE ubicacion_id IN (SELECT id FROM ubicacion WHERE tipo='MUEBLE' AND mueble_num=?)",
-            pendId, mueble);
+        Integer usados = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM paquetes WHERE distrito_id=?",
+            Integer.class,
+            id
+        );
+        int count = (usados == null) ? 0 : usados;
 
-        int movedSacos = jdbc.update(
-            "UPDATE sacos SET default_ubicacion_id=? " +
-            "WHERE default_ubicacion_id IN (SELECT id FROM ubicacion WHERE tipo='MUEBLE' AND mueble_num=?)",
-            pendId, mueble);
+        if (count > 0) {
+            // soft-delete
+            int upd = jdbc.update("UPDATE distritos SET activo=0 WHERE id=?", id);
+            return Map.of(
+                "ok", upd > 0,
+                "deleted", false,
+                "desactivado", true,
+                "id", id,
+                "nombre", nombreDb,
+                "paquetes_asociados", count,
+                "message", "Distrito tiene paquetes asociados: se desactivó (activo=0)."
+            );
+        }
 
-        // eliminar ubicaciones del mueble
-        int deletedUbics = jdbc.update(
-            "DELETE FROM ubicacion WHERE tipo='MUEBLE' AND mueble_num=?", mueble);
-
+        // sin paquetes: se puede borrar
+        int del = jdbc.update("DELETE FROM distritos WHERE id=?", id);
         return Map.of(
-            "ok", true,
-            "paquetes_movidos", movedPaq,
-            "sacos_movidos", movedSacos,
-            "ubicaciones_eliminadas", deletedUbics
+            "ok", del > 0,
+            "deleted", true,
+            "id", id,
+            "nombre", nombreDb,
+            "prev_activo", activo
+        );
+    }
+
+    // (Opcional útil) listar distritos desde admin (incluye inactivos)
+    @GetMapping("/distritos")
+    public List<Map<String, Object>> listDistritosAdmin() {
+        return jdbc.queryForList(
+            "SELECT id, nombre, activo, created_at FROM distritos ORDER BY nombre ASC"
         );
     }
 
@@ -130,10 +189,31 @@ public class AdminController {
         public String password;
         public String role; // USER | ADMIN
     }
-    public static class AddMuebleReq {
-        public Integer mueble;
-        public Integer estanterias;
+
+    public static class AddDistritoReq {
+        public String nombre;
     }
 
-    private String norm(String s) { return s == null ? null : s.trim().toLowerCase(); }
+    // ---------- Helpers ----------
+    private String normUsername(String s) {
+        return s == null ? null : s.trim().toLowerCase();
+    }
+
+    private String normDistrito(String s) {
+        // no forzamos lowercase para conservar el display (la collation ya es case-insensitive)
+        return s == null ? null : s.trim();
+    }
+
+    private boolean toBool(Object v) {
+        if (v == null) return false;
+        if (v instanceof Boolean b) return b;
+        String s = String.valueOf(v).trim();
+        return "1".equals(s) || "true".equalsIgnoreCase(s) || "y".equalsIgnoreCase(s) || "yes".equalsIgnoreCase(s);
+    }
+
+    private Long toLong(Object v) {
+        if (v == null) return null;
+        if (v instanceof Number n) return n.longValue();
+        return Long.valueOf(String.valueOf(v));
+    }
 }
