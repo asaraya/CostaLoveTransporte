@@ -1,6 +1,7 @@
 package com.cargosfsr.inventario.auth;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.springframework.dao.DuplicateKeyException;
@@ -41,7 +42,7 @@ public class AdminController {
     public Map<String, Object> createUser(@RequestBody CreateUserReq req) {
         String username = normUsername(req.username);
         String fullName = req.fullName == null ? null : req.fullName.trim();
-        String role     = (req.role == null || req.role.isBlank()) ? "USER" : req.role.trim().toUpperCase();
+        String role     = (req.role == null || req.role.isBlank()) ? "USER" : req.role.trim().toUpperCase(Locale.ROOT);
 
         if (!StringUtils.hasText(username) || username.length() < 3 || !username.matches("^[a-z0-9._-]{3,60}$")) {
             throw new IllegalArgumentException("Usuario inválido");
@@ -80,7 +81,6 @@ public class AdminController {
             throw new IllegalArgumentException("Nombre de distrito inválido");
         }
 
-        // Si existe (activo o inactivo), lo manejamos:
         try {
             Map<String, Object> existing = jdbc.queryForMap(
                 "SELECT id, nombre, activo FROM distritos WHERE nombre = ? LIMIT 1",
@@ -102,7 +102,6 @@ public class AdminController {
             );
 
         } catch (EmptyResultDataAccessException ex) {
-            // No existe, insertamos
             try {
                 jdbc.update("INSERT INTO distritos (nombre) VALUES (?)", nombre);
                 Long id = jdbc.queryForObject(
@@ -112,7 +111,6 @@ public class AdminController {
                 );
                 return Map.of("ok", true, "id", id, "nombre", nombre);
             } catch (DuplicateKeyException dk) {
-                // Por collation/unique, por si entró una carrera
                 return Map.of("ok", false, "message", "El distrito ya existe", "nombre", nombre);
             }
         }
@@ -128,7 +126,7 @@ public class AdminController {
         }
 
         Long id;
-        Integer activo;
+        boolean activoBool;
         String nombreDb;
         try {
             Map<String, Object> row = jdbc.queryForMap(
@@ -136,21 +134,20 @@ public class AdminController {
                 n
             );
             id = toLong(row.get("id"));
-            activo = (row.get("activo") == null) ? 1 : Integer.valueOf(String.valueOf(row.get("activo")));
+            activoBool = toBool(row.get("activo"));   // ✅ FIX: no parsear a Integer
             nombreDb = String.valueOf(row.get("nombre"));
         } catch (EmptyResultDataAccessException ex) {
             return Map.of("ok", false, "message", "Distrito no existe");
         }
 
-        Integer usados = jdbc.queryForObject(
+        Long usados = jdbc.queryForObject(
             "SELECT COUNT(*) FROM paquetes WHERE distrito_id=?",
-            Integer.class,
+            Long.class,
             id
         );
-        int count = (usados == null) ? 0 : usados;
+        long count = (usados == null) ? 0 : usados;
 
         if (count > 0) {
-            // soft-delete
             int upd = jdbc.update("UPDATE distritos SET activo=0 WHERE id=?", id);
             return Map.of(
                 "ok", upd > 0,
@@ -163,14 +160,13 @@ public class AdminController {
             );
         }
 
-        // sin paquetes: se puede borrar
         int del = jdbc.update("DELETE FROM distritos WHERE id=?", id);
         return Map.of(
             "ok", del > 0,
             "deleted", true,
             "id", id,
             "nombre", nombreDb,
-            "prev_activo", activo
+            "prev_activo", activoBool
         );
     }
 
@@ -196,11 +192,10 @@ public class AdminController {
 
     // ---------- Helpers ----------
     private String normUsername(String s) {
-        return s == null ? null : s.trim().toLowerCase();
+        return s == null ? null : s.trim().toLowerCase(Locale.ROOT);
     }
 
     private String normDistrito(String s) {
-        // no forzamos lowercase para conservar el display (la collation ya es case-insensitive)
         return s == null ? null : s.trim();
     }
 
