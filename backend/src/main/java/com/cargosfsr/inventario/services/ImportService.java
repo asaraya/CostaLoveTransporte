@@ -557,7 +557,7 @@ public class ImportService {
         if (trackings.isEmpty()) return;
         List<String> uniq = trackings.stream().filter(ImportService::notBlank).distinct().toList();
         jdbc.batchUpdate(
-            "INSERT IGNORE INTO paquetes(tracking_code, saco_id, distrito_id, estado) VALUES (?,?,?, 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE')",
+            "INSERT IGNORE INTO paquetes(tracking_code, saco_id, distrito_id, estado) VALUES (?,?,?, 'ENTREGADO_A_TRANSPORTISTA_LOCAL')",
             new BatchPreparedStatementSetter() {
                 @Override
                 public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {

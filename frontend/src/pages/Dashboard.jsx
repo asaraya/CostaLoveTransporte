@@ -171,9 +171,10 @@ export default function Dashboard() {
       //   entonces aquí debemos traer EN INVENTARIO también.
       // - Usamos el MISMO endpoint existente: /busqueda/distrito/{nombre}
       const { data } = await api.get(`/busqueda/distrito/${encodeURIComponent(distrito)}`, {
-        params: { estado: 'EN_INVENTARIO' }
+        params: {
+          estado: 'ENTREGADO_A_TRANSPORTISTA_LOCAL,NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE,ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'
+        }
       })
-
       const arr = Array.isArray(data) ? data : []
       const rows = arr
         .filter(r => ESTADOS_INVENTARIO.has(String(r?.estado ?? '').toUpperCase()))
