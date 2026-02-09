@@ -1,3 +1,4 @@
+// src/main/java/com/cargosfsr/inventario/controllers/BusquedaController.java
 package com.cargosfsr.inventario.controllers;
 
 import java.time.Instant;
@@ -66,7 +67,15 @@ public class BusquedaController {
         return consultas.porEstado(estado, tipoFecha, desde, hasta);
     }
 
-    /** Por distrito (nombre) */
+    /**
+     * Por distrito (nombre)
+     *
+     * estado (opcional) ahora soporta:
+     * - Un solo estado: "ENTREGADO_A_TRANSPORTISTA_LOCAL"
+     * - CSV de estados: "ENTREGADO_A_TRANSPORTISTA_LOCAL,NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE,ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO"
+     * - "EN_INVENTARIO" / "INVENTARIO" (se expande a los 3 estados)
+     * - "TODOS" (sin filtro)
+     */
     @GetMapping("/distrito/{nombre}")
     public List<Map<String, Object>> porDistrito(
             @PathVariable String nombre,

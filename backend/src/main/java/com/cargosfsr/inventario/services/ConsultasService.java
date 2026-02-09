@@ -1,10 +1,15 @@
+// src/main/java/com/cargosfsr/inventario/services/ConsultasService.java
 package com.cargosfsr.inventario.services;
 
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.springframework.cache.annotation.Cacheable;
@@ -27,9 +32,55 @@ public class ConsultasService {
      * - EN_INVENTARIO = cualquier paquete cuyo estado esté en cualquiera de estos 3 estados.
      * - NO_ENTREGABLE (cualquier subtipo) = fuera de inventario.
      */
-    private static final String SQL_ESTADOS_EN_INVENTARIO = "('ENTREGADO_A_TRANSPORTISTA_LOCAL','NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE','ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')";
+    private static final String SQL_ESTADOS_EN_INVENTARIO =
+            "('ENTREGADO_A_TRANSPORTISTA_LOCAL','NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE','ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')";
+
+    private static final List<String> ESTADOS_EN_INVENTARIO = List.of(
+            "ENTREGADO_A_TRANSPORTISTA_LOCAL",
+            "NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE",
+            "ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO"
+    );
 
     private Timestamp ts(Instant i) { return i == null ? null : Timestamp.from(i); }
+
+    /**
+     * Soporta:
+     * - null/blank => null
+     * - "TODOS" => null (sin filtro)
+     * - "EN_INVENTARIO" / "INVENTARIO" => lista de 3 estados
+     * - "A,B,C" (CSV) => lista [A,B,C]
+     * - "A" => lista [A]
+     */
+    private static List<String> parseEstados(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+
+        String t = raw.trim().toUpperCase(Locale.ROOT);
+
+        if ("TODOS".equals(t)) return null;
+
+        if ("EN_INVENTARIO".equals(t) || "INVENTARIO".equals(t)) {
+            return ESTADOS_EN_INVENTARIO;
+        }
+
+        // CSV o uno solo
+        List<String> out = Arrays.stream(raw.split(","))
+                .map(s -> s == null ? "" : s.trim().toUpperCase(Locale.ROOT))
+                .filter(s -> !s.isEmpty())
+                .distinct()
+                .toList();
+
+        return out.isEmpty() ? null : out;
+    }
+
+    private static long asLong(Object v) {
+        if (v == null) return -1L;
+        if (v instanceof Number n) return n.longValue();
+        try {
+            return Long.parseLong(String.valueOf(v));
+        } catch (Exception ignore) {
+            return -1L;
+        }
+    }
 
     /* ==========================
      * INVENTARIO PAGINADO (estado o TODOS)
@@ -41,7 +92,7 @@ public class ConsultasService {
 
         String est = (estado == null || estado.isBlank())
                 ? "NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE"
-                : estado.trim().toUpperCase();
+                : estado.trim().toUpperCase(Locale.ROOT);
 
         final String selectCols = """
             SELECT
@@ -101,7 +152,7 @@ public class ConsultasService {
     public long countInventario(String estado) {
         String est = (estado == null || estado.isBlank())
                 ? "NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE"
-                : estado.trim().toUpperCase();
+                : estado.trim().toUpperCase(Locale.ROOT);
 
         if ("TODOS".equals(est)) {
             return jdbc.queryForObject("SELECT COUNT(*) FROM paquetes", Long.class);
@@ -175,7 +226,7 @@ public class ConsultasService {
         Timestamp pDesde = ts(desde);
         Timestamp pHasta = ts(hasta);
         String pMarchamo = (marchamo == null || marchamo.isBlank()) ? null : marchamo;
-        String pSubtipo  = (subtipo  == null || subtipo.isBlank())  ? "ALL" : subtipo.toUpperCase();
+        String pSubtipo  = (subtipo  == null || subtipo.isBlank())  ? "ALL" : subtipo.toUpperCase(Locale.ROOT);
         return jdbc.queryForList("CALL sp_paquetes_devolucion(?, ?, ?, ?)", pDesde, pHasta, pMarchamo, pSubtipo);
     }
 
@@ -296,15 +347,46 @@ public class ConsultasService {
 
         String pTipo = (tipoFecha == null || tipoFecha.isBlank())
                 ? "CAMBIO"
-                : tipoFecha.trim().toUpperCase();
+                : tipoFecha.trim().toUpperCase(Locale.ROOT);
 
-        String pEstado = (estado == null || estado.isBlank())
-                ? null
-                : estado.trim().toUpperCase();
+        // ✅ aquí está el cambio: soportar CSV / EN_INVENTARIO / TODOS
+        List<String> estados = parseEstados(estado);
 
-        // SP: (p_distrito_nombre, p_tipo_fecha, p_desde, p_hasta, p_estado)
-        return jdbc.queryForList("CALL sp_paquetes_por_distrito(?, ?, ?, ?, ?)",
-                nombre, pTipo, pDesde, pHasta, pEstado);
+        // Caso sin filtro de estado: llama la SP tal cual (p_estado = null)
+        if (estados == null || estados.isEmpty()) {
+            return jdbc.queryForList("CALL sp_paquetes_por_distrito(?, ?, ?, ?, ?)",
+                    nombre, pTipo, pDesde, pHasta, null);
+        }
+
+        // Un solo estado: igual que antes
+        if (estados.size() == 1) {
+            return jdbc.queryForList("CALL sp_paquetes_por_distrito(?, ?, ?, ?, ?)",
+                    nombre, pTipo, pDesde, pHasta, estados.get(0));
+        }
+
+        // ✅ Múltiples estados: NO le pasamos "A,B,C" a la SP (eso rompe).
+        // Llamamos 1 vez por estado y unimos resultados.
+        LinkedHashMap<Object, Map<String, Object>> uniq = new LinkedHashMap<>();
+
+        for (String st : estados) {
+            List<Map<String, Object>> part = jdbc.queryForList("CALL sp_paquetes_por_distrito(?, ?, ?, ?, ?)",
+                    nombre, pTipo, pDesde, pHasta, st);
+
+            for (Map<String, Object> row : part) {
+                Object key = row.get("id");
+                if (key == null) key = row.get("tracking_code");
+                if (key == null) key = row; // fallback extremo
+                // si ya existe, no lo pisa (primer match gana)
+                uniq.putIfAbsent(key, row);
+            }
+        }
+
+        List<Map<String, Object>> merged = new ArrayList<>(uniq.values());
+
+        // Orden razonable (si viene id): DESC
+        merged.sort((a, b) -> Long.compare(asLong(b.get("id")), asLong(a.get("id"))));
+
+        return merged;
     }
 
     @Cacheable(cacheNames = "inventario", key = "'cnt_distrito:'+ #nombre")
@@ -312,7 +394,6 @@ public class ConsultasService {
         // alias para lo que ya tenés
         return countPorDistritoNombre(nombre);
     }
-
 
     /**
      * Reporte diario FLAT (para dashboard).
