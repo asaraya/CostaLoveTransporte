@@ -37,8 +37,33 @@ public class EstadoService {
             Pattern.compile("(HZCR|CR)\\d+", Pattern.CASE_INSENSITIVE);
 
     // TRANSPORTISTA y MENSAJERO = mismo rol operativo (compat con ambos nombres)
-    private static final List<String> ROLES_MENSAJERIA = List.of("MENSAJERO", "TRANSPORTISTA");
+    private static final String ROL_MENSAJERO = "MENSAJERO";
+    private static final String ROLE_TRANSPORTISTA_PREFIX = "TRANSPORTISTA";
 
+    private boolean isRolMensajeria(String r) {
+        if (!StringUtils.hasText(r)) return false;
+        String up = r.trim().toUpperCase(Locale.ROOT);
+        return up.equals(ROL_MENSAJERO) || up.startsWith(ROLE_TRANSPORTISTA_PREFIX);
+    }
+
+    private List<Usuario> findMensajerosActivos() {
+        return em.createQuery("""
+            SELECT u
+            FROM Usuario u
+            WHERE u.active = true
+            AND (
+                    TRIM(UPPER(u.rol)) = :mensajero
+                OR TRIM(UPPER(u.role)) = :mensajero
+                OR TRIM(UPPER(u.rol)) LIKE :transportistaLike
+                OR TRIM(UPPER(u.role)) LIKE :transportistaLike
+            )
+            ORDER BY u.fullName ASC
+        """, Usuario.class)
+        .setParameter("mensajero", ROL_MENSAJERO)
+        .setParameter("transportistaLike", ROLE_TRANSPORTISTA_PREFIX + "%")
+        .getResultList();
+    }
+    
     private final PaqueteRepository paquetes;
     private final PaqueteEstadoHistorialRepository historial;
     private final UsuarioRepository usuarios;

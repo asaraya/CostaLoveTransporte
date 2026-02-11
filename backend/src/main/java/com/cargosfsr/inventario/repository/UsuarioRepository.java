@@ -25,4 +25,18 @@ public interface UsuarioRepository extends JpaRepository<Usuario, Long> {
            ORDER BY u.fullName ASC
            """)
     List<Usuario> findActivosPorRoles(@Param("roles") List<String> roles);
+
+    @Query("""
+            SELECT u
+            FROM Usuario u
+            WHERE u.active = true
+                AND (
+                    TRIM(UPPER(u.rol)) = 'MENSAJERO'
+                    OR TRIM(UPPER(u.role)) = 'MENSAJERO'
+                    OR TRIM(UPPER(u.rol)) LIKE 'TRANSPORTISTA%'
+                    OR TRIM(UPPER(u.role)) LIKE 'TRANSPORTISTA%'
+                )
+            ORDER BY u.fullName ASC
+            """)
+            List<Usuario> findMensajeriaActiva();
 }
