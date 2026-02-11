@@ -36,6 +36,9 @@ public class EstadoService {
     private static final Pattern TRACKING_PATTERN =
             Pattern.compile("(HZCR|CR)\\d+", Pattern.CASE_INSENSITIVE);
 
+    // TRANSPORTISTA y MENSAJERO = mismo rol operativo (compat con ambos nombres)
+    private static final List<String> ROLES_MENSAJERIA = List.of("MENSAJERO", "TRANSPORTISTA");
+
     private final PaqueteRepository paquetes;
     private final PaqueteEstadoHistorialRepository historial;
     private final UsuarioRepository usuarios;
@@ -53,6 +56,34 @@ public class EstadoService {
         this.usuarios = usuarios;
     }
 
+    private boolean isRolMensajeria(String r) {
+        if (!StringUtils.hasText(r)) return false;
+        String up = r.trim().toUpperCase();
+        return ROLES_MENSAJERIA.contains(up);
+    }
+
+    private boolean usuarioEsMensajeria(Usuario u) {
+        // Compat: hay instalaciones donde el rol viene en u.rol y otras donde viene en u.role
+        return isRolMensajeria(u.getRol()) || isRolMensajeria(u.getRole());
+    }
+
+    /**
+     * Lista usuarios activos con rol de mensajería.
+     * Compat: acepta MENSAJERO/TRANSPORTISTA tanto en columna "rol" como en "role".
+     */
+    private List<Usuario> findMensajerosActivos() {
+        // Usamos JPQL para no depender de métodos extra en UsuarioRepository.
+        return em.createQuery("""
+            SELECT u
+              FROM Usuario u
+             WHERE u.active = true
+               AND (UPPER(u.rol) IN :roles OR UPPER(u.role) IN :roles)
+             ORDER BY u.fullName ASC
+        """, Usuario.class)
+        .setParameter("roles", ROLES_MENSAJERIA)
+        .getResultList();
+    }
+
     private Usuario requireMensajero(Long mensajeroId) {
         if (mensajeroId == null) {
             throw new IllegalArgumentException("mensajeroId requerido para PRUEBA_DE_ENTREGA");
@@ -61,17 +92,17 @@ public class EstadoService {
             () -> new IllegalArgumentException("No existe mensajero con id: " + mensajeroId)
         );
         if (u.getActive() != null && !u.getActive()) {
-            throw new IllegalArgumentException("El mensajero está inactivo: " + u.getFullName());
+            throw new IllegalArgumentException("El mensajero/transportista está inactivo: " + u.getFullName());
         }
-        if (u.getRol() == null || !"MENSAJERO".equalsIgnoreCase(u.getRol())) {
-            throw new IllegalArgumentException("El usuario no tiene rol MENSAJERO: " + u.getFullName());
+        if (!usuarioEsMensajeria(u)) {
+            throw new IllegalArgumentException("El usuario no tiene rol MENSAJERO/TRANSPORTISTA: " + u.getFullName());
         }
         return u;
     }
 
-    /** Lista mensajeros activos para que el FE muestre el selector */
+    /** Lista mensajeros/transportistas activos para que el FE muestre el selector */
     public List<Map<String, Object>> listarMensajerosActivos() {
-        List<Usuario> list = usuarios.findByRolAndActiveTrueOrderByFullNameAsc("MENSAJERO");
+        List<Usuario> list = findMensajerosActivos();
         List<Map<String, Object>> out = new ArrayList<>();
         for (Usuario u : list) {
             Map<String, Object> m = new LinkedHashMap<>();
