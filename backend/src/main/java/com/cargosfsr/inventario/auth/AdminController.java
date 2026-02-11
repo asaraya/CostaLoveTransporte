@@ -49,7 +49,11 @@ public class AdminController {
         }
         if (!StringUtils.hasText(fullName)) throw new IllegalArgumentException("Nombre inválido");
         if (!StringUtils.hasText(req.password) || req.password.length() < 6) throw new IllegalArgumentException("Contraseña muy corta");
-        if (!role.equals("USER") && !role.equals("ADMIN")) throw new IllegalArgumentException("Rol inválido");
+
+        // Roles soportados por la app (string en BD)
+        if (!role.equals("USER") && !role.equals("ADMIN") && !role.equals("TRANSPORTISTA")) {
+            throw new IllegalArgumentException("Rol inválido");
+        }
 
         String hash = bcrypt.encode(req.password);
         jdbc.update("CALL sp_crear_usuario(?,?,?,?)", username, fullName, hash, role);
@@ -134,7 +138,7 @@ public class AdminController {
                 n
             );
             id = toLong(row.get("id"));
-            activoBool = toBool(row.get("activo"));   // ✅ FIX: no parsear a Integer
+            activoBool = toBool(row.get("activo"));
             nombreDb = String.valueOf(row.get("nombre"));
         } catch (EmptyResultDataAccessException ex) {
             return Map.of("ok", false, "message", "Distrito no existe");
@@ -183,7 +187,7 @@ public class AdminController {
         public String username;
         public String fullName;
         public String password;
-        public String role; // USER | ADMIN
+        public String role; // USER | ADMIN | TRANSPORTISTA
     }
 
     public static class AddDistritoReq {

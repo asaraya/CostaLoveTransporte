@@ -229,6 +229,7 @@ export default function AdminProfile() {
             <select value={uForm.role} onChange={(e) => setUForm({ ...uForm, role: e.target.value })}>
               <option value="USER">USER</option>
               <option value="ADMIN">ADMIN</option>
+              <option value="TRANSPORTISTA">TRANSPORTISTA</option>
             </select>
           </div>
           <button disabled={loading} type="submit">
