@@ -89,7 +89,7 @@ public class PaqueteController {
                 body.isForce(),
                 body.getWhen(),
                 body.getDevolucionSubtipo(),
-                body.null
+                body.getMensajeroId()
         );
     }
 
@@ -104,7 +104,7 @@ public class PaqueteController {
                 body.isForce(),
                 body.getWhen(),
                 body.getDevolucionSubtipo(),
-                body.null
+                body.getMensajeroId()
         );
     }
 
@@ -191,6 +191,9 @@ public class PaqueteController {
 
         private String devolucionSubtipo; // FUERA_DE_RUTA | VENCIDOS | DOS_INTENTOS
 
+        // NUEVO: requerido para ciertos estados (ej. PRUEBA_DE_ENTREGA) según EstadoService
+        private Long mensajeroId;
+
         public String getNuevoEstado() { return nuevoEstado; }
         public void setNuevoEstado(String nuevoEstado) { this.nuevoEstado = nuevoEstado; }
 
@@ -208,6 +211,9 @@ public class PaqueteController {
 
         public String getDevolucionSubtipo() { return devolucionSubtipo; }
         public void setDevolucionSubtipo(String devolucionSubtipo) { this.devolucionSubtipo = devolucionSubtipo; }
+
+        public Long getMensajeroId() { return mensajeroId; }
+        public void setMensajeroId(Long mensajeroId) { this.mensajeroId = mensajeroId; }
     }
 
     public static class CambiarEstadoBulkReq {
@@ -221,6 +227,9 @@ public class PaqueteController {
         private Instant when;
 
         private String devolucionSubtipo;
+
+        // NUEVO: requerido para ciertos estados (ej. PRUEBA_DE_ENTREGA) según EstadoService
+        private Long mensajeroId;
 
         public List<String> getTrackings() { return trackings; }
         public void setTrackings(List<String> trackings) { this.trackings = trackings; }
@@ -242,6 +251,9 @@ public class PaqueteController {
 
         public String getDevolucionSubtipo() { return devolucionSubtipo; }
         public void setDevolucionSubtipo(String devolucionSubtipo) { this.devolucionSubtipo = devolucionSubtipo; }
+
+        public Long getMensajeroId() { return mensajeroId; }
+        public void setMensajeroId(Long mensajeroId) { this.mensajeroId = mensajeroId; }
     }
 
     public static class BulkDeleteReq {
