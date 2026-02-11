@@ -36,6 +36,37 @@ function parseTokens(raw) {
   return out
 }
 
+/**
+ * Construye un path que funcione con ambas configuraciones:
+ * - si api.defaults.baseURL termina en "/api" => usamos "/estado/..." (porque ya trae /api)
+ * - si NO trae "/api" => usamos "/api/estado/..."
+ *
+ * Así NO tocamos ./api, pero garantizamos pegarle al endpoint real del backend.
+ */
+function apiPath(pathSinApiPrefix) {
+  const base = String(api?.defaults?.baseURL || '').replace(/\/+$/, '')
+  const p = pathSinApiPrefix.startsWith('/') ? pathSinApiPrefix : `/${pathSinApiPrefix}`
+
+  if (base.endsWith('/api')) {
+    // baseURL ya incluye /api
+    return p
+  }
+  // baseURL NO incluye /api → prefijamos /api
+  return p.startsWith('/api/') ? p : `/api${p}`
+}
+
+function formatAxiosErr(e, url) {
+  const status = e?.response?.status
+  const msg =
+    e?.response?.data?.message ||
+    e?.message ||
+    'No se pudo cargar la lista'
+
+  const base = String(api?.defaults?.baseURL || '(vacío)')
+  const finalUrl = `${base} + ${url}`
+  return `${msg}${status ? ` (HTTP ${status})` : ''} | URL: ${finalUrl}`
+}
+
 export default function Entregas() {
   const [raw, setRaw] = useState('')
   const trackings = useMemo(() => parseTokens(raw), [raw])
@@ -72,13 +103,17 @@ export default function Entregas() {
   const [log, setLog] = useState([])
   const appendLog = (line) => setLog(prev => [...prev, line])
 
-  const cargarMensajeros = () => {
+  const fetchMensajeros = () => {
+    const url = apiPath('/estado/mensajeros') // => /estado/mensajeros o /api/estado/mensajeros según baseURL
     let alive = true
-    const url = '/api/estado/mensajeros' // <-- ESTE ES EL ENDPOINT REAL SEGÚN TU CONTROLLER
 
     setMensajeroLoadErr('')
     setLoadingMensajeros(true)
     setMensajerosTried(true)
+
+    // Debug directo (esto te dice EXACTAMENTE qué intenta llamar)
+    // eslint-disable-next-line no-console
+    console.log('[Entregas] baseURL=', api?.defaults?.baseURL, 'GET', url)
 
     api.get(url, { timeout: 15000 })
       .then(({ data }) => {
@@ -89,8 +124,7 @@ export default function Entregas() {
       })
       .catch((e) => {
         if (!alive) return
-        const msg = e?.response?.data?.message || e.message || 'No se pudo cargar la lista de mensajeros'
-        setMensajeroLoadErr(`${msg} (GET ${url})`)
+        setMensajeroLoadErr(formatAxiosErr(e, url))
       })
       .finally(() => {
         if (!alive) return
@@ -104,23 +138,20 @@ export default function Entregas() {
   useEffect(() => {
     const needs = nuevoEstado === 'PRUEBA_DE_ENTREGA'
     if (!needs) return
-
-    // si ya cargó bien, no recargar
+    if (loadingMensajeros) return
     if (mensajeros.length > 0) return
 
-    // si ya intentó y falló, NO reintentar en loop (se reintenta con botón)
+    // si ya intentó y falló, no reintentar en loop
     if (mensajerosTried && mensajeroLoadErr) return
 
-    // no duplicar requests
-    if (loadingMensajeros) return
-
-    return cargarMensajeros()
+    return fetchMensajeros()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nuevoEstado, mensajeros.length, loadingMensajeros, mensajerosTried, mensajeroLoadErr])
 
   const existeTracking = async (t) => {
     try {
-      const { data } = await api.get('/api/busqueda/tracking', { params: { q: t, like: 0 }, timeout: 15000 })
+      const url = apiPath('/busqueda/tracking')
+      const { data } = await api.get(url, { params: { q: t, like: 0 }, timeout: 15000 })
       return Array.isArray(data) && data.length > 0
     } catch {
       return false
@@ -157,8 +188,9 @@ export default function Entregas() {
         if (inexistentes.includes(t)) { failCount++; continue }
 
         try {
+          const url = apiPath('/estado/tracking')
           // eslint-disable-next-line no-await-in-loop
-          await api.post('/api/estado/tracking', {
+          await api.post(url, {
             tracking: t,
             estado: nuevoEstado,
             motivo: 'Cambio desde Entregas',
@@ -244,14 +276,14 @@ export default function Entregas() {
               ))}
             </select>
 
-            {(mensajeroLoadErr && !loadingMensajeros) && (
+            {!loadingMensajeros && !!mensajeroLoadErr && (
               <button
                 type="button"
                 style={{ padding: '8px 10px' }}
                 onClick={() => {
                   setMensajerosTried(false)
                   setMensajeroLoadErr('')
-                  cargarMensajeros()
+                  fetchMensajeros()
                 }}
               >
                 Reintentar
