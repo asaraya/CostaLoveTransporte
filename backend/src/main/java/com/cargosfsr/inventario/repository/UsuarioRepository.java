@@ -21,22 +21,30 @@ public interface UsuarioRepository extends JpaRepository<Usuario, Long> {
            SELECT u
            FROM Usuario u
            WHERE u.active = true
-             AND (UPPER(u.rol) IN :roles OR UPPER(u.role) IN :roles)
+             AND (TRIM(UPPER(u.rol)) IN :roles OR TRIM(UPPER(u.role)) IN :roles)
            ORDER BY u.fullName ASC
            """)
     List<Usuario> findActivosPorRoles(@Param("roles") List<String> roles);
 
+    /**
+     * Mensajería operativa:
+     * - Acepta MENSAJERO
+     * - Acepta cualquier variante que empiece con TRANSPORTISTA (p.ej. "TRANSPORTISTA.", "TRANSPORTISTA LOCAL")
+     *
+     * Nota: se busca tanto en columna "rol" (operativo) como en "role" (login/permisos),
+     * porque en tu BD coexisten ambas.
+     */
     @Query("""
             SELECT u
             FROM Usuario u
             WHERE u.active = true
-                AND (
+              AND (
                     TRIM(UPPER(u.rol)) = 'MENSAJERO'
-                    OR TRIM(UPPER(u.role)) = 'MENSAJERO'
-                    OR TRIM(UPPER(u.rol)) LIKE 'TRANSPORTISTA%'
-                    OR TRIM(UPPER(u.role)) LIKE 'TRANSPORTISTA%'
-                )
+                 OR TRIM(UPPER(u.role)) = 'MENSAJERO'
+                 OR TRIM(UPPER(u.rol)) LIKE 'TRANSPORTISTA%'
+                 OR TRIM(UPPER(u.role)) LIKE 'TRANSPORTISTA%'
+              )
             ORDER BY u.fullName ASC
-            """)
-            List<Usuario> findMensajeriaActiva();
+           """)
+    List<Usuario> findMensajeriaActiva();
 }

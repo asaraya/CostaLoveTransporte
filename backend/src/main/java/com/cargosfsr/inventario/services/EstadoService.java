@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -36,34 +37,14 @@ public class EstadoService {
     private static final Pattern TRACKING_PATTERN =
             Pattern.compile("(HZCR|CR)\\d+", Pattern.CASE_INSENSITIVE);
 
-    // TRANSPORTISTA y MENSAJERO = mismo rol operativo (compat con ambos nombres)
+    /**
+     * Mensajería operativa:
+     * - MENSAJERO
+     * - TRANSPORTISTA (y cualquier variante que empiece con TRANSPORTISTA: "TRANSPORTISTA.", "TRANSPORTISTA LOCAL", etc.)
+     */
     private static final String ROL_MENSAJERO = "MENSAJERO";
     private static final String ROLE_TRANSPORTISTA_PREFIX = "TRANSPORTISTA";
 
-    private boolean isRolMensajeria(String r) {
-        if (!StringUtils.hasText(r)) return false;
-        String up = r.trim().toUpperCase(Locale.ROOT);
-        return up.equals(ROL_MENSAJERO) || up.startsWith(ROLE_TRANSPORTISTA_PREFIX);
-    }
-
-    private List<Usuario> findMensajerosActivos() {
-        return em.createQuery("""
-            SELECT u
-            FROM Usuario u
-            WHERE u.active = true
-            AND (
-                    TRIM(UPPER(u.rol)) = :mensajero
-                OR TRIM(UPPER(u.role)) = :mensajero
-                OR TRIM(UPPER(u.rol)) LIKE :transportistaLike
-                OR TRIM(UPPER(u.role)) LIKE :transportistaLike
-            )
-            ORDER BY u.fullName ASC
-        """, Usuario.class)
-        .setParameter("mensajero", ROL_MENSAJERO)
-        .setParameter("transportistaLike", ROLE_TRANSPORTISTA_PREFIX + "%")
-        .getResultList();
-    }
-    
     private final PaqueteRepository paquetes;
     private final PaqueteEstadoHistorialRepository historial;
     private final UsuarioRepository usuarios;
@@ -83,8 +64,8 @@ public class EstadoService {
 
     private boolean isRolMensajeria(String r) {
         if (!StringUtils.hasText(r)) return false;
-        String up = r.trim().toUpperCase();
-        return ROLES_MENSAJERIA.contains(up);
+        String up = r.trim().toUpperCase(Locale.ROOT);
+        return up.equals(ROL_MENSAJERO) || up.startsWith(ROLE_TRANSPORTISTA_PREFIX);
     }
 
     private boolean usuarioEsMensajeria(Usuario u) {
@@ -97,16 +78,9 @@ public class EstadoService {
      * Compat: acepta MENSAJERO/TRANSPORTISTA tanto en columna "rol" como en "role".
      */
     private List<Usuario> findMensajerosActivos() {
-        // Usamos JPQL para no depender de métodos extra en UsuarioRepository.
-        return em.createQuery("""
-            SELECT u
-              FROM Usuario u
-             WHERE u.active = true
-               AND (UPPER(u.rol) IN :roles OR UPPER(u.role) IN :roles)
-             ORDER BY u.fullName ASC
-        """, Usuario.class)
-        .setParameter("roles", ROLES_MENSAJERIA)
-        .getResultList();
+        // Importante: tolerante a variaciones como "TRANSPORTISTA." / "TRANSPORTISTA LOCAL" y a espacios.
+        // Se busca tanto en columna "rol" (operativo) como "role" (login/permisos).
+        return usuarios.findMensajeriaActiva();
     }
 
     private Usuario requireMensajero(Long mensajeroId) {
