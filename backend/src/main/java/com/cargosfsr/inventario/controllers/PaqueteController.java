@@ -88,7 +88,8 @@ public class PaqueteController {
                 body.getChangedBy(),
                 body.isForce(),
                 body.getWhen(),
-                body.getDevolucionSubtipo()
+                body.getDevolucionSubtipo(),
+                body.null
         );
     }
 
@@ -102,7 +103,8 @@ public class PaqueteController {
                 body.getChangedBy(),
                 body.isForce(),
                 body.getWhen(),
-                body.getDevolucionSubtipo()
+                body.getDevolucionSubtipo(),
+                body.null
         );
     }
 
