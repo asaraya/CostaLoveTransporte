@@ -65,6 +65,7 @@ const SEARCH_TYPES = [
 
 // ✅ Estados (códigos) -> nombres EXACTOS que pediste + orden correcto
 const ESTADOS_UI = [
+  { key: 'PRUEBA_DE_ENTREGA', label: 'Prueba de entrega' },
   { key: 'EN_INVENTARIO', label: 'En inventario' },
   { key: 'ENTREGADO_A_TRANSPORTISTA_LOCAL', label: 'Entregado a transportista local' },
   { key: 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE', label: 'No entregado - Consignatario no disponible' },

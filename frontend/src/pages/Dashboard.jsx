@@ -10,6 +10,7 @@ const toCRISO = (yyyyMmDd, hh = '00', mm = '00', ss = '00') => {
 }
 
 const ESTADO_LABEL = {
+  PRUEBA_DE_ENTREGA: 'Prueba de entrega',
   ENTREGADO_A_TRANSPORTISTA_LOCAL: 'Entregado a transportista local',
   NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE: 'No entregado - Consignatario no disponible',
   ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO: 'Entregado a transportista local - 2do intento',
@@ -23,6 +24,7 @@ const labelEstado = (code) => {
 
 // ✅ En inventario = cualquiera de estos 3 estados
 const ESTADOS_INVENTARIO = new Set([
+  'PRUEBA_DE_ENTREGA',
   'ENTREGADO_A_TRANSPORTISTA_LOCAL',
   'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
   'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO',

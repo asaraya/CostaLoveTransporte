@@ -45,6 +45,7 @@ export default function Entregas() {
 
   // Estados (labels según lo solicitado)
   const ESTADOS = [
+    { val: 'PRUEBA_DE_ENTREGA', label: 'Prueba de Entrega' },
     { val: 'ENTREGADO_A_TRANSPORTISTA_LOCAL', label: 'Entregado a transportista local' },
     { val: 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE', label: 'No entregado - Consignatario no disponible' }, // 1er intento
     { val: 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO', label: 'Entregado a transportista local - 2do intento' }, // 2do intento
