@@ -1,6 +1,7 @@
 package com.cargosfsr.inventario.model.enums;
 
 public enum PaqueteEstado {
+    PRUEBA_DE_ENTREGA,
     ENTREGADO_A_TRANSPORTISTA_LOCAL,
     NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE,
     ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO,

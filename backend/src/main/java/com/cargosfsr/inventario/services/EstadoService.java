@@ -96,7 +96,7 @@ public class EstadoService {
         PaqueteEstado anterior = p.getEstado();
         Instant ts = (when != null ? when : Instant.now());
 
-        boolean touchedDelivered = false;
+        boolean touchedDelivered = false; // delivered_at = ENTREGADO a la PERSONA (PRUEBA_DE_ENTREGA)
         boolean touchedReturned  = false;
 
         DevolucionSubtipo sub = null;
@@ -104,21 +104,30 @@ public class EstadoService {
             sub = DevolucionSubtipo.valueOf(devolucionSubtipoOpt.trim().toUpperCase());
         }
 
-        // Reglas nuevas
-        if (nuevo == PaqueteEstado.ENTREGADO_A_TRANSPORTISTA_LOCAL
-                || nuevo == PaqueteEstado.ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO) {
+        // ===== Reglas de negocio =====
+        // - Estados "ENTREGADO_A_TRANSPORTISTA_*" y "NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE" NO son entrega final.
+        // - PRUEBA_DE_ENTREGA SÍ significa entregado a la persona => set delivered_at
+        // - NO_ENTREGABLE significa devolución => set returned_at
+
+        if (nuevo == PaqueteEstado.PRUEBA_DE_ENTREGA) {
             p.setDeliveredAt(ts);
             touchedDelivered = true;
+
+            // No puede estar devuelto y entregado final a la vez
+            if (p.getReturnedAt() != null) {
+                p.setReturnedAt(null);
+            }
+
         } else if (nuevo == PaqueteEstado.NO_ENTREGABLE) {
             p.setReturnedAt(ts);
             touchedReturned = true;
             p.setDevolucionSubtipo(sub != null ? sub : DevolucionSubtipo.FUERA_DE_RUTA);
+
         } else if (nuevo == PaqueteEstado.NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE && force) {
-            // reset a "disponible": limpia entregas/devoluciones
+            // reset a "disponible": limpia entrega/devolución
             if (p.getDeliveredAt() != null || p.getReturnedAt() != null) {
                 p.setDeliveredAt(null);
                 p.setReturnedAt(null);
-                // no marcamos touched* porque es nullear; se hace con save + update directo aparte
             }
         }
 
@@ -153,6 +162,11 @@ public class EstadoService {
         // timestamps de estado
         if (touchedDelivered) sql.append(", delivered_at = DATE_SUB(:ts, INTERVAL 6 HOUR)");
         if (touchedReturned)  sql.append(", returned_at  = DATE_SUB(:ts, INTERVAL 6 HOUR)");
+
+        // si se marca como entregado a persona, limpia devolución
+        if (nuevo == PaqueteEstado.PRUEBA_DE_ENTREGA) {
+            sql.append(", returned_at = NULL");
+        }
 
         // reset forzado (limpiar)
         if (nuevo == PaqueteEstado.NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE && force) {
