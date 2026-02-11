@@ -18,6 +18,7 @@ const ESTADOS_INVENTARIO = new Set([
 ])
 
 const SHEET_TITLES = {
+  PRUEBA_DE_ENTREGA: 'Prueba de entrega',
   ENTREGADO_A_TRANSPORTISTA_LOCAL: 'Entregado TL',
   NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE: 'No entregado',
   ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO: 'Entregado TL 2do',
@@ -72,6 +73,8 @@ const esCR = { timeZone: CR_TZ }
 function labelEstado(e) {
   const k = String(e || '').toUpperCase()
   switch (k) {
+    case 'PRUEBA_DE_ENTREGA':
+      return 'Prueba de Entrega'
     case 'ENTREGADO_A_TRANSPORTISTA_LOCAL':
       return 'Entregado a transportista local'
     case 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE':
@@ -149,7 +152,8 @@ export default function Reportes() {
 
   const [loading, setLoading] = useState(false)
 
-  // 4 estados
+  // 5 estados (incluye PRUEBA_DE_ENTREGA)
+  const [stPruebaEntrega, setStPruebaEntrega] = useState([])
   const [stEntregadoTL, setStEntregadoTL] = useState([])
   const [stNoEntregado, setStNoEntregado] = useState([])
   const [stEntregado2do, setStEntregado2do] = useState([])
@@ -187,24 +191,27 @@ export default function Reportes() {
         }
       }
 
-      const [rETL, rNE, rE2, rNEN] = await Promise.all([
+      const [rPDE, rETL, rNE, rE2, rNEN] = await Promise.all([
+        api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'PRUEBA_DE_ENTREGA' } }),
         api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'ENTREGADO_A_TRANSPORTISTA_LOCAL' } }),
         api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' } }),
         api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO' } }),
         api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'NO_ENTREGABLE' } }),
       ])
 
+      const aPDE = Array.isArray(rPDE.data) ? rPDE.data : []
       const aETL = Array.isArray(rETL.data) ? rETL.data : []
       const aNE  = Array.isArray(rNE.data) ? rNE.data : []
       const aE2  = Array.isArray(rE2.data) ? rE2.data : []
       const aNEN = Array.isArray(rNEN.data) ? rNEN.data : []
 
+      setStPruebaEntrega(aPDE)
       setStEntregadoTL(aETL)
       setStNoEntregado(aNE)
       setStEntregado2do(aE2)
       setStNoEntregable(aNEN)
 
-      // “En inventario” = unión deduplicada por tracking
+      // “En inventario” = unión deduplicada por tracking (NO incluye PRUEBA_DE_ENTREGA)
       setStInventario(uniqByTracking([...aETL, ...aNE, ...aE2]))
     } catch (e) {
       alert(e?.response?.data?.message || e?.message || 'Error')
@@ -216,6 +223,7 @@ export default function Reportes() {
   const resetear = () => {
     setMode('dia'); setFecha(hoy); setDesde(hoy); setHasta(hoy)
     setFiltrarFechas(false)
+    setStPruebaEntrega([])
     setStEntregadoTL([]); setStNoEntregado([]); setStEntregado2do([]); setStNoEntregable([]); setStInventario([])
   }
 
@@ -261,6 +269,9 @@ export default function Reportes() {
 
     if (exportFormat === 'xlsx') {
       const wb = XLSX.utils.book_new()
+      // NUEVO: PRUEBA_DE_ENTREGA primero
+      addSheetFixed(wb, SHEET_TITLES.PRUEBA_DE_ENTREGA, stPruebaEntrega, dateKey)
+
       addSheetFixed(wb, SHEET_TITLES.ENTREGADO_A_TRANSPORTISTA_LOCAL, stEntregadoTL, dateKey)
       addSheetFixed(wb, SHEET_TITLES.NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE, stNoEntregado, dateKey)
       addSheetFixed(wb, SHEET_TITLES.ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO, stEntregado2do, dateKey)
@@ -272,6 +283,7 @@ export default function Reportes() {
 
     // CSV (una sola hoja: todo junto)
     const all = [
+      ...projectRows(stPruebaEntrega, dateKey),
       ...projectRows(stEntregadoTL, dateKey),
       ...projectRows(stNoEntregado, dateKey),
       ...projectRows(stEntregado2do, dateKey),
@@ -294,6 +306,7 @@ export default function Reportes() {
   }
 
   const kpi = [
+    { title: 'Prueba de Entrega', value: stPruebaEntrega.length },
     { title: 'Entregado TL', value: stEntregadoTL.length },
     { title: 'No entregado', value: stNoEntregado.length },
     { title: 'Entregado TL 2do', value: stEntregado2do.length },
@@ -353,11 +366,17 @@ export default function Reportes() {
         )
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, margin: '12px 0' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, margin: '12px 0' }}>
         {kpi.map((k, i) => <Kpi key={i} title={k.title} value={k.value} />)}
       </div>
 
+      {/* NUEVO: matriz/tabla al inicio */}
       <section style={{ marginTop: 8 }}>
+        <h4>Prueba de Entrega {filtrarFechas ? (mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)) : '(Actual)'}</h4>
+        <DataTable rows={stPruebaEntrega} dateKey="last_state_change_at" />
+      </section>
+
+      <section style={{ marginTop: 16 }}>
         <h4>Entregado a transportista local {filtrarFechas ? (mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)) : '(Actual)'}</h4>
         <DataTable rows={stEntregadoTL} dateKey="last_state_change_at" />
       </section>
@@ -385,7 +404,14 @@ export default function Reportes() {
   )
 
   function totalFilas() {
-    return stEntregadoTL.length + stNoEntregado.length + stEntregado2do.length + stNoEntregable.length + stInventario.length
+    return (
+      stPruebaEntrega.length +
+      stEntregadoTL.length +
+      stNoEntregado.length +
+      stEntregado2do.length +
+      stNoEntregable.length +
+      stInventario.length
+    )
   }
 }
 
