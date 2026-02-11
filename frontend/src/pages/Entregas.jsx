@@ -1,3 +1,4 @@
+// src/pages/Entregas.jsx
 import { useEffect, useMemo, useState } from 'react'
 import { api, toastErr, toastOk } from '../api'
 
@@ -36,37 +37,6 @@ function parseTokens(raw) {
   return out
 }
 
-/**
- * Construye un path que funcione con ambas configuraciones:
- * - si api.defaults.baseURL termina en "/api" => usamos "/estado/..." (porque ya trae /api)
- * - si NO trae "/api" => usamos "/api/estado/..."
- *
- * Así NO tocamos ./api, pero garantizamos pegarle al endpoint real del backend.
- */
-function apiPath(pathSinApiPrefix) {
-  const base = String(api?.defaults?.baseURL || '').replace(/\/+$/, '')
-  const p = pathSinApiPrefix.startsWith('/') ? pathSinApiPrefix : `/${pathSinApiPrefix}`
-
-  if (base.endsWith('/api')) {
-    // baseURL ya incluye /api
-    return p
-  }
-  // baseURL NO incluye /api → prefijamos /api
-  return p.startsWith('/api/') ? p : `/api${p}`
-}
-
-function formatAxiosErr(e, url) {
-  const status = e?.response?.status
-  const msg =
-    e?.response?.data?.message ||
-    e?.message ||
-    'No se pudo cargar la lista'
-
-  const base = String(api?.defaults?.baseURL || '(vacío)')
-  const finalUrl = `${base} + ${url}`
-  return `${msg}${status ? ` (HTTP ${status})` : ''} | URL: ${finalUrl}`
-}
-
 export default function Entregas() {
   const [raw, setRaw] = useState('')
   const trackings = useMemo(() => parseTokens(raw), [raw])
@@ -89,7 +59,6 @@ export default function Entregas() {
   const [mensajeroId, setMensajeroId] = useState('')
   const [loadingMensajeros, setLoadingMensajeros] = useState(false)
   const [mensajeroLoadErr, setMensajeroLoadErr] = useState('')
-  const [mensajerosTried, setMensajerosTried] = useState(false) // evita loop infinito
 
   // Subcategorías (solo aplica si estado = NO_ENTREGABLE)
   const SUBS = [
@@ -103,28 +72,28 @@ export default function Entregas() {
   const [log, setLog] = useState([])
   const appendLog = (line) => setLog(prev => [...prev, line])
 
-  const fetchMensajeros = () => {
-    const url = apiPath('/estado/mensajeros') // => /estado/mensajeros o /api/estado/mensajeros según baseURL
-    let alive = true
+  // Cargar mensajeros cuando se selecciona PRUEBA_DE_ENTREGA
+  useEffect(() => {
+    const needs = nuevoEstado === 'PRUEBA_DE_ENTREGA'
+    if (!needs) return
+    if (mensajeros.length > 0) return
 
+    let alive = true
     setMensajeroLoadErr('')
     setLoadingMensajeros(true)
-    setMensajerosTried(true)
 
-    // Debug directo (esto te dice EXACTAMENTE qué intenta llamar)
-    // eslint-disable-next-line no-console
-    console.log('[Entregas] baseURL=', api?.defaults?.baseURL, 'GET', url)
-
-    api.get(url, { timeout: 15000 })
+    // timeout corto para evitar quedar "pegado" si hay problema de red/CORS
+    api.get('/estado/mensajeros', { timeout: 15000 })
       .then(({ data }) => {
         if (!alive) return
         const list = Array.isArray(data) ? data : []
         setMensajeros(list)
+        // auto-select si solo hay uno
         if (list.length === 1) setMensajeroId(String(list[0].id))
       })
       .catch((e) => {
         if (!alive) return
-        setMensajeroLoadErr(formatAxiosErr(e, url))
+        setMensajeroLoadErr(e?.response?.data?.message || e.message || 'No se pudo cargar la lista de mensajeros')
       })
       .finally(() => {
         if (!alive) return
@@ -132,26 +101,11 @@ export default function Entregas() {
       })
 
     return () => { alive = false }
-  }
-
-  // Cargar mensajeros cuando se selecciona PRUEBA_DE_ENTREGA
-  useEffect(() => {
-    const needs = nuevoEstado === 'PRUEBA_DE_ENTREGA'
-    if (!needs) return
-    if (loadingMensajeros) return
-    if (mensajeros.length > 0) return
-
-    // si ya intentó y falló, no reintentar en loop
-    if (mensajerosTried && mensajeroLoadErr) return
-
-    return fetchMensajeros()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nuevoEstado, mensajeros.length, loadingMensajeros, mensajerosTried, mensajeroLoadErr])
+  }, [nuevoEstado, mensajeros.length])
 
   const existeTracking = async (t) => {
     try {
-      const url = apiPath('/busqueda/tracking')
-      const { data } = await api.get(url, { params: { q: t, like: 0 }, timeout: 15000 })
+      const { data } = await api.get('/busqueda/tracking', { params: { q: t, like: 0 } })
       return Array.isArray(data) && data.length > 0
     } catch {
       return false
@@ -188,16 +142,15 @@ export default function Entregas() {
         if (inexistentes.includes(t)) { failCount++; continue }
 
         try {
-          const url = apiPath('/estado/tracking')
           // eslint-disable-next-line no-await-in-loop
-          await api.post(url, {
+          await api.post('/estado/tracking', {
             tracking: t,
             estado: nuevoEstado,
             motivo: 'Cambio desde Entregas',
             devolucionSubtipo: (nuevoEstado === 'NO_ENTREGABLE' ? devolSub : undefined),
             when: whenISO,
             mensajeroId: (nuevoEstado === 'PRUEBA_DE_ENTREGA' ? Number(mensajeroId) : undefined),
-          }, { timeout: 15000 })
+          })
 
           okCount++
           appendLog(
@@ -228,6 +181,7 @@ export default function Entregas() {
       aria-pressed={nuevoEstado === opt.val}
       onClick={() => {
         setNuevoEstado(opt.val)
+        // si vuelven a escoger PRUEBA..., mantenemos el mensajero seleccionado
       }}
     >
       {opt.label}
@@ -275,20 +229,6 @@ export default function Entregas() {
                 </option>
               ))}
             </select>
-
-            {!loadingMensajeros && !!mensajeroLoadErr && (
-              <button
-                type="button"
-                style={{ padding: '8px 10px' }}
-                onClick={() => {
-                  setMensajerosTried(false)
-                  setMensajeroLoadErr('')
-                  fetchMensajeros()
-                }}
-              >
-                Reintentar
-              </button>
-            )}
           </label>
 
           {loadingMensajeros && (
@@ -305,7 +245,7 @@ export default function Entregas() {
 
           {!loadingMensajeros && !mensajeroLoadErr && mensajeros.length === 0 && (
             <div style={{ fontSize: 12, color: '#b00020', marginTop: 4 }}>
-              No hay usuarios con rol MENSAJERO/TRANSPORTISTA activos.
+              No hay usuarios con rol MENSAJERO activos.
             </div>
           )}
         </div>
