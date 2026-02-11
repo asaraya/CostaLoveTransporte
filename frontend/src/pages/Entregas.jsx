@@ -58,6 +58,7 @@ export default function Entregas() {
   const [mensajeroId, setMensajeroId] = useState('')
   const [loadingMensajeros, setLoadingMensajeros] = useState(false)
   const [mensajeroLoadErr, setMensajeroLoadErr] = useState('')
+  const [mensajerosTried, setMensajerosTried] = useState(false) // evita loop infinito
 
   // Subcategorías (solo aplica si estado = NO_ENTREGABLE)
   const SUBS = [
@@ -71,28 +72,25 @@ export default function Entregas() {
   const [log, setLog] = useState([])
   const appendLog = (line) => setLog(prev => [...prev, line])
 
-  // Cargar mensajeros cuando se selecciona PRUEBA_DE_ENTREGA
-  useEffect(() => {
-    const needs = nuevoEstado === 'PRUEBA_DE_ENTREGA'
-    if (!needs) return
-    if (loadingMensajeros) return
-    if (mensajeros.length > 0) return
-
+  const cargarMensajeros = () => {
     let alive = true
+    const url = '/api/estado/mensajeros' // <-- ESTE ES EL ENDPOINT REAL SEGÚN TU CONTROLLER
+
     setMensajeroLoadErr('')
     setLoadingMensajeros(true)
+    setMensajerosTried(true)
 
-    api.get('/estado/mensajeros')
+    api.get(url, { timeout: 15000 })
       .then(({ data }) => {
         if (!alive) return
         const list = Array.isArray(data) ? data : []
         setMensajeros(list)
-        // auto-select si solo hay uno
         if (list.length === 1) setMensajeroId(String(list[0].id))
       })
       .catch((e) => {
         if (!alive) return
-        setMensajeroLoadErr(e?.response?.data?.message || e.message || 'No se pudo cargar la lista de mensajeros')
+        const msg = e?.response?.data?.message || e.message || 'No se pudo cargar la lista de mensajeros'
+        setMensajeroLoadErr(`${msg} (GET ${url})`)
       })
       .finally(() => {
         if (!alive) return
@@ -100,11 +98,29 @@ export default function Entregas() {
       })
 
     return () => { alive = false }
-  }, [nuevoEstado, mensajeros.length, loadingMensajeros])
+  }
+
+  // Cargar mensajeros cuando se selecciona PRUEBA_DE_ENTREGA
+  useEffect(() => {
+    const needs = nuevoEstado === 'PRUEBA_DE_ENTREGA'
+    if (!needs) return
+
+    // si ya cargó bien, no recargar
+    if (mensajeros.length > 0) return
+
+    // si ya intentó y falló, NO reintentar en loop (se reintenta con botón)
+    if (mensajerosTried && mensajeroLoadErr) return
+
+    // no duplicar requests
+    if (loadingMensajeros) return
+
+    return cargarMensajeros()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nuevoEstado, mensajeros.length, loadingMensajeros, mensajerosTried, mensajeroLoadErr])
 
   const existeTracking = async (t) => {
     try {
-      const { data } = await api.get('/busqueda/tracking', { params: { q: t, like: 0 } })
+      const { data } = await api.get('/api/busqueda/tracking', { params: { q: t, like: 0 }, timeout: 15000 })
       return Array.isArray(data) && data.length > 0
     } catch {
       return false
@@ -142,14 +158,14 @@ export default function Entregas() {
 
         try {
           // eslint-disable-next-line no-await-in-loop
-          await api.post('/estado/tracking', {
+          await api.post('/api/estado/tracking', {
             tracking: t,
             estado: nuevoEstado,
             motivo: 'Cambio desde Entregas',
             devolucionSubtipo: (nuevoEstado === 'NO_ENTREGABLE' ? devolSub : undefined),
             when: whenISO,
             mensajeroId: (nuevoEstado === 'PRUEBA_DE_ENTREGA' ? Number(mensajeroId) : undefined),
-          })
+          }, { timeout: 15000 })
 
           okCount++
           appendLog(
@@ -180,7 +196,6 @@ export default function Entregas() {
       aria-pressed={nuevoEstado === opt.val}
       onClick={() => {
         setNuevoEstado(opt.val)
-        // si vuelven a escoger PRUEBA..., mantenemos el mensajero seleccionado
       }}
     >
       {opt.label}
@@ -228,6 +243,20 @@ export default function Entregas() {
                 </option>
               ))}
             </select>
+
+            {(mensajeroLoadErr && !loadingMensajeros) && (
+              <button
+                type="button"
+                style={{ padding: '8px 10px' }}
+                onClick={() => {
+                  setMensajerosTried(false)
+                  setMensajeroLoadErr('')
+                  cargarMensajeros()
+                }}
+              >
+                Reintentar
+              </button>
+            )}
           </label>
 
           {loadingMensajeros && (
@@ -244,7 +273,7 @@ export default function Entregas() {
 
           {!loadingMensajeros && !mensajeroLoadErr && mensajeros.length === 0 && (
             <div style={{ fontSize: 12, color: '#b00020', marginTop: 4 }}>
-              No hay usuarios con rol MENSAJERO activos.
+              No hay usuarios con rol MENSAJERO/TRANSPORTISTA activos.
             </div>
           )}
         </div>
