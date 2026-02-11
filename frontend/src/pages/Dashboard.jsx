@@ -22,18 +22,43 @@ const labelEstado = (code) => {
   return ESTADO_LABEL[k] || (code ?? '-')
 }
 
-// ✅ En inventario = cualquiera de estos 3 estados
+// ✅ EN INVENTARIO = SOLO estos 3 estados (siguen con nosotros)
 const ESTADOS_INVENTARIO = new Set([
-  'PRUEBA_DE_ENTREGA',
   'ENTREGADO_A_TRANSPORTISTA_LOCAL',
   'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
   'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO',
 ])
 
+// ✅ Fuera de inventario (ya se fue / devuelto)
+const ESTADOS_FUERA = new Set([
+  'PRUEBA_DE_ENTREGA',
+  'NO_ENTREGABLE',
+])
+
+function normalizeByEstado(arr) {
+  const a = Array.isArray(arr) ? arr : []
+  return a.map(r => ({
+    estado: String(r?.estado ?? '').toUpperCase(),
+    cantidad: Number(r?.cantidad ?? r?.total ?? r?.count ?? 0) || 0,
+  }))
+}
+
+function calcInventarioDesdeByEstado(byEstado) {
+  const rows = normalizeByEstado(byEstado)
+  return rows.reduce((acc, r) => acc + (ESTADOS_INVENTARIO.has(r.estado) ? r.cantidad : 0), 0)
+}
+
 export default function Dashboard() {
   const [fecha, setFecha] = useState(() =>
     new Intl.DateTimeFormat('en-CA', { timeZone: CR_TZ }).format(new Date())
   )
+
+  // ✅ Resumen mensual (matriz tipo hoja)
+  const [mes, setMes] = useState(() => {
+    const hoy = new Intl.DateTimeFormat('en-CA', { timeZone: CR_TZ }).format(new Date())
+    return hoy.slice(0, 7) // YYYY-MM
+  })
+  const [mensual, setMensual] = useState({ rows: [], loading: false, error: null })
 
   const [summary, setSummary] = useState(null)
   const [topDistritos, setTopDistritos] = useState([])
@@ -65,8 +90,6 @@ export default function Dashboard() {
 
   const cargarTopDistritos = async () => {
     try {
-      // OJO: el endpoint puede seguir llamándose "top-ubicaciones" en backend,
-      // pero aquí lo tratamos como "top-distritos".
       const { data } = await api.get('/dashboard/top-distritos', { params: { limit: 100000 } })
       const arr = Array.isArray(data) ? data : []
 
@@ -161,17 +184,90 @@ export default function Dashboard() {
     }
   }
 
+  // ✅ Resumen mensual (matriz tipo hoja) – SOLO usando /dashboard/summary existente
+  const getDaysInMonth = (yyyyMm) => {
+    const [yStr, mStr] = String(yyyyMm || '').split('-')
+    const y = Number(yStr)
+    const m = Number(mStr) // 1..12
+    if (!y || !m) return []
+    const last = new Date(Date.UTC(y, m, 0)).getUTCDate() // día final del mes
+    const out = []
+    for (let d = 1; d <= last; d++) {
+      const dd = String(d).padStart(2, '0')
+      out.push(`${yStr}-${mStr}-${dd}`)
+    }
+    return out
+  }
+
+  const mapWithConcurrency = async (items, limit, fn) => {
+    const results = new Array(items.length)
+    let idx = 0
+    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (idx < items.length) {
+        const current = idx++
+        results[current] = await fn(items[current], current)
+      }
+    })
+    await Promise.all(workers)
+    return results
+  }
+
+  const cargarResumenMensual = async () => {
+    const days = getDaysInMonth(mes)
+    if (!days.length) {
+      setMensual({ rows: [], loading: false, error: null })
+      return
+    }
+
+    setMensual({ rows: [], loading: true, error: null })
+    try {
+      const rows = await mapWithConcurrency(days, 6, async (ymd) => {
+        const { data } = await api.get('/dashboard/summary', { params: { fecha: ymd } })
+
+        // movimientos del día (según summary.hoy)
+        const hoyObj = data?.hoy ?? {}
+        const recibidos = Number(hoyObj?.recibidos ?? 0) || 0
+
+        // “ya no están con nosotros”:
+        // - PRUEBA_DE_ENTREGA: normalmente cae en "entregados" del summary del día
+        const pruebaEntrega = Number(hoyObj?.entregados ?? 0) || 0
+
+        // - NO_ENTREGABLE: puede venir como noEntregable/no_entregable/devoluciones
+        const noEntregable =
+          Number(hoyObj?.noEntregable ?? hoyObj?.no_entregable ?? hoyObj?.devoluciones ?? 0) || 0
+
+        // inventario al cierre: sumatoria correcta por estado (NO depende de inventarioActual)
+        const invCierre = calcInventarioDesdeByEstado(data?.byEstado)
+
+        return {
+          ymd,
+          dia: ymd.slice(8, 10),
+          recibidos,
+          pruebaEntrega,
+          noEntregable,
+          salieron: pruebaEntrega + noEntregable,
+          inventarioCierre: invCierre,
+        }
+      })
+
+      setMensual({ rows, loading: false, error: null })
+    } catch (e) {
+      setMensual({
+        rows: [],
+        loading: false,
+        error: e?.response?.data?.message || e?.message || 'Error cargando resumen mensual',
+      })
+    }
+  }
+
   useEffect(() => { cargarTopDistritos() }, [])
   useEffect(() => { cargarFecha() }, [fecha])
+  useEffect(() => { cargarResumenMensual() }, [mes])
 
   // ✅ Modal: paquetes del distrito (EN INVENTARIO)
   const openDistritoModal = async (distrito) => {
     setDistModal({ open: true, distrito, rows: [], loading: true, error: null })
     try {
-      // IMPORTANTE:
-      // - El conteo "Paquetes por distrito" refleja EN INVENTARIO,
-      //   entonces aquí debemos traer EN INVENTARIO también.
-      // - Usamos el MISMO endpoint existente: /busqueda/distrito/{nombre}
       const { data } = await api.get(`/busqueda/distrito/${encodeURIComponent(distrito)}`, {
         params: {
           estado: 'ENTREGADO_A_TRANSPORTISTA_LOCAL,NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE,ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'
@@ -257,22 +353,115 @@ export default function Dashboard() {
 
   const currentPFDateKey = 'received_at'
 
+  // ✅ En inventario “real” (según estados correctos)
+  const inventarioRealHoy = summary ? calcInventarioDesdeByEstado(summary.byEstado) : 0
+
+  // Totales del mes (para el footer de la matriz)
+  const mensualTotales = mensual.rows.reduce((acc, r) => {
+    acc.recibidos += r.recibidos
+    acc.pruebaEntrega += r.pruebaEntrega
+    acc.noEntregable += r.noEntregable
+    acc.salieron += r.salieron
+    return acc
+  }, { recibidos: 0, pruebaEntrega: 0, noEntregable: 0, salieron: 0 })
+
   return (
     <div>
       <h3>Dashboard</h3>
 
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12 }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <label>Fecha:
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} />
         </label>
-        <button onClick={cargarTodo} disabled={loading}>{loading ? 'Actualizando…' : 'Actualizar'}</button>
+
+        {/* ✅ Selector del mes para Resumen Mensual */}
+        <label>Mes:
+          <input
+            type="month"
+            value={mes}
+            onChange={e => setMes(e.target.value)}
+            style={{ marginLeft: 6 }}
+          />
+        </label>
+
+        <button onClick={cargarTodo} disabled={loading}>
+          {loading ? 'Actualizando…' : 'Actualizar'}
+        </button>
+      </div>
+
+      {/* ✅ Resumen mensual (matriz tipo hoja) */}
+      <div style={{ marginBottom: 16 }}>
+        <h4 style={{ marginBottom: 8 }}>Resumen mensual (matriz)</h4>
+
+        {mensual.loading && (
+          <div style={{ padding: 10, opacity: .8 }}>Cargando resumen mensual…</div>
+        )}
+        {!!mensual.error && (
+          <div style={{ padding: 10, color: '#b00020' }}>{mensual.error}</div>
+        )}
+
+        {!mensual.loading && !mensual.error && (
+          <div style={{ border: '1px solid rgba(22,62,122,.15)', borderRadius: 10, overflow: 'hidden' }}>
+            <div style={{ maxHeight: 420, overflow: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#f3f7ff' }}>
+                    <th style={th}>Día</th>
+                    <th style={th}>Recibidos</th>
+                    <th style={th}>Prueba de entrega (salieron)</th>
+                    <th style={th}>No entregable (salieron)</th>
+                    <th style={th}>Total salieron</th>
+                    <th style={th}>En inventario (cierre)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mensual.rows.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>
+                        Sin datos para el mes seleccionado
+                      </td>
+                    </tr>
+                  ) : mensual.rows.map((r) => (
+                    <tr key={r.ymd} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+                      <td style={td}>{r.dia}</td>
+                      <td style={td}>{r.recibidos}</td>
+                      <td style={td}>{r.pruebaEntrega}</td>
+                      <td style={td}>{r.noEntregable}</td>
+                      <td style={td}>{r.salieron}</td>
+                      <td style={td}><strong>{r.inventarioCierre}</strong></td>
+                    </tr>
+                  ))}
+                </tbody>
+                {mensual.rows.length > 0 && (
+                  <tfoot>
+                    <tr style={{ background: '#fbfcff', borderTop: '2px solid rgba(22,62,122,.15)' }}>
+                      <td style={{ ...td, fontWeight: 800 }}>TOTAL</td>
+                      <td style={{ ...td, fontWeight: 800 }}>{mensualTotales.recibidos}</td>
+                      <td style={{ ...td, fontWeight: 800 }}>{mensualTotales.pruebaEntrega}</td>
+                      <td style={{ ...td, fontWeight: 800 }}>{mensualTotales.noEntregable}</td>
+                      <td style={{ ...td, fontWeight: 800 }}>{mensualTotales.salieron}</td>
+                      <td style={{ ...td, fontWeight: 800 }}>
+                        {mensual.rows[mensual.rows.length - 1]?.inventarioCierre ?? 0}
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+            <div style={{ padding: 10, fontSize: 12, opacity: .8 }}>
+              * “En inventario (cierre)” = suma de estados: ENTREGADO_A_TRANSPORTISTA_LOCAL, NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE, ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO.
+              PRUEBA_DE_ENTREGA y NO_ENTREGABLE se consideran “ya no están con nosotros”.
+            </div>
+          </div>
+        )}
       </div>
 
       {/* KPIs */}
       {summary && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 12 }}>
           <Kpi title="Paquetes totales" value={summary.totales?.paquetes ?? summary.totalPaquetes ?? 0} />
-          <Kpi title="En inventario" value={summary.inventarioActual ?? 0} />
+          {/* ✅ En inventario recalculado correctamente */}
+          <Kpi title="En inventario" value={inventarioRealHoy ?? 0} />
         </div>
       )}
 
