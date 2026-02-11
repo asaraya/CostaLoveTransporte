@@ -35,6 +35,10 @@ public class Usuario {
     @Column(nullable = false, length = 40)
     private String role = "USER";
 
+    // Rol operativo dentro del sistema (ADMIN | OPERADOR | MENSAJERO)
+    @Column(name = "rol", nullable = false, length = 30)
+    private String rol = "OPERADOR";
+
     @Column(nullable = false)
     private Boolean active = true;
 
@@ -83,6 +87,14 @@ public class Usuario {
 
     public void setRole(String role) {
         this.role = role;
+    }
+
+    public String getRol() {
+        return rol;
+    }
+
+    public void setRol(String rol) {
+        this.rol = rol;
     }
 
     public Boolean getActive() {

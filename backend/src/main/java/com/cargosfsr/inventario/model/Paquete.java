@@ -83,6 +83,11 @@ public class Paquete {
     @Column(name = "responsable_consolidado", length = 100)
     private String responsableConsolidado;
 
+    // Mensajero que realizó la entrega final (solo aplica en PRUEBA_DE_ENTREGA)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "mensajero_id")
+    private Usuario mensajero;
+
     @Column(name = "observaciones", length = 500)
     private String observaciones;
 
@@ -146,6 +151,9 @@ public class Paquete {
 
     public String getResponsableConsolidado() { return responsableConsolidado; }
     public void setResponsableConsolidado(String responsableConsolidado) { this.responsableConsolidado = responsableConsolidado; }
+
+    public Usuario getMensajero() { return mensajero; }
+    public void setMensajero(Usuario mensajero) { this.mensajero = mensajero; }
 
     public String getObservaciones() { return observaciones; }
     public void setObservaciones(String observaciones) { this.observaciones = observaciones; }

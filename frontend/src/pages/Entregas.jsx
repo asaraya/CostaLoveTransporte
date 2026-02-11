@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, toastErr, toastOk } from '../api'
 
 // Zona horaria de Costa Rica
@@ -53,6 +53,12 @@ export default function Entregas() {
   ]
   const [nuevoEstado, setNuevoEstado] = useState(ESTADOS[0].val)
 
+  // Mensajeros (solo aplica si estado = PRUEBA_DE_ENTREGA)
+  const [mensajeros, setMensajeros] = useState([])
+  const [mensajeroId, setMensajeroId] = useState('')
+  const [loadingMensajeros, setLoadingMensajeros] = useState(false)
+  const [mensajeroLoadErr, setMensajeroLoadErr] = useState('')
+
   // Subcategorías (solo aplica si estado = NO_ENTREGABLE)
   const SUBS = [
     { val: 'FUERA_DE_RUTA', label: 'Fuera de ruta' },
@@ -64,6 +70,37 @@ export default function Entregas() {
   const [loading, setLoading] = useState(false)
   const [log, setLog] = useState([])
   const appendLog = (line) => setLog(prev => [...prev, line])
+
+  // Cargar mensajeros cuando se selecciona PRUEBA_DE_ENTREGA
+  useEffect(() => {
+    const needs = nuevoEstado === 'PRUEBA_DE_ENTREGA'
+    if (!needs) return
+    if (loadingMensajeros) return
+    if (mensajeros.length > 0) return
+
+    let alive = true
+    setMensajeroLoadErr('')
+    setLoadingMensajeros(true)
+
+    api.get('/estado/mensajeros')
+      .then(({ data }) => {
+        if (!alive) return
+        const list = Array.isArray(data) ? data : []
+        setMensajeros(list)
+        // auto-select si solo hay uno
+        if (list.length === 1) setMensajeroId(String(list[0].id))
+      })
+      .catch((e) => {
+        if (!alive) return
+        setMensajeroLoadErr(e?.response?.data?.message || e.message || 'No se pudo cargar la lista de mensajeros')
+      })
+      .finally(() => {
+        if (!alive) return
+        setLoadingMensajeros(false)
+      })
+
+    return () => { alive = false }
+  }, [nuevoEstado, mensajeros.length, loadingMensajeros])
 
   const existeTracking = async (t) => {
     try {
@@ -77,6 +114,11 @@ export default function Entregas() {
   const onAplicar = async () => {
     try {
       if (!trackings.length) { appendLog('⚠️ Ingrese al menos un tracking.'); return }
+
+      if (nuevoEstado === 'PRUEBA_DE_ENTREGA' && !mensajeroId) {
+        appendLog('⚠️ Seleccione un Mensajero para aplicar "Prueba de Entrega".')
+        return
+      }
 
       setLoading(true)
       setLog([])
@@ -106,12 +148,14 @@ export default function Entregas() {
             motivo: 'Cambio desde Entregas',
             devolucionSubtipo: (nuevoEstado === 'NO_ENTREGABLE' ? devolSub : undefined),
             when: whenISO,
+            mensajeroId: (nuevoEstado === 'PRUEBA_DE_ENTREGA' ? Number(mensajeroId) : undefined),
           })
 
           okCount++
           appendLog(
             `✅ ${t} → ${nuevoEstado}` +
             (nuevoEstado === 'NO_ENTREGABLE' ? ` (${devolSub})` : '') +
+            (nuevoEstado === 'PRUEBA_DE_ENTREGA' ? ` (mensajero ${mensajeroId})` : '') +
             ` (fecha ${fecha})`
           )
         } catch (e) {
@@ -134,7 +178,10 @@ export default function Entregas() {
       type="button"
       className={`toggle ${nuevoEstado === opt.val ? 'is-selected' : ''}`}
       aria-pressed={nuevoEstado === opt.val}
-      onClick={() => setNuevoEstado(opt.val)}
+      onClick={() => {
+        setNuevoEstado(opt.val)
+        // si vuelven a escoger PRUEBA..., mantenemos el mensajero seleccionado
+      }}
     >
       {opt.label}
     </button>
@@ -163,6 +210,45 @@ export default function Entregas() {
         <label>Estado a aplicar:</label>
         {ESTADOS.map(estadoBtn)}
       </div>
+
+      {nuevoEstado === 'PRUEBA_DE_ENTREGA' && (
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span>Mensajero:</span>
+            <select
+              value={mensajeroId}
+              onChange={(e) => setMensajeroId(e.target.value)}
+              disabled={loadingMensajeros}
+              style={{ padding: 8, minWidth: 260 }}
+            >
+              <option value="">— Seleccione —</option>
+              {mensajeros.map(m => (
+                <option key={m.id} value={String(m.id)}>
+                  {m.fullName || m.username || `ID ${m.id}`}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {loadingMensajeros && (
+            <div style={{ fontSize: 12, opacity: .75, marginTop: 4 }}>
+              Cargando mensajeros…
+            </div>
+          )}
+
+          {!!mensajeroLoadErr && (
+            <div style={{ fontSize: 12, color: '#b00020', marginTop: 4 }}>
+              {mensajeroLoadErr}
+            </div>
+          )}
+
+          {!loadingMensajeros && !mensajeroLoadErr && mensajeros.length === 0 && (
+            <div style={{ fontSize: 12, color: '#b00020', marginTop: 4 }}>
+              No hay usuarios con rol MENSAJERO activos.
+            </div>
+          )}
+        </div>
+      )}
 
       {nuevoEstado === 'NO_ENTREGABLE' && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>

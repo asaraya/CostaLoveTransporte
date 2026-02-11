@@ -41,6 +41,11 @@ public class PaqueteEstadoHistorial {
     @Column(name = "changed_at", nullable = false)
     private Instant changedAt = Instant.now();
 
+    // Mensajero que realizó la entrega final (solo aplica cuando estado_to = PRUEBA_DE_ENTREGA)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "mensajero_id")
+    private Usuario mensajero;
+
     private String motivo;
     private String changedBy;
 
@@ -54,6 +59,8 @@ public class PaqueteEstadoHistorial {
     public void setEstadoTo(PaqueteEstado estadoTo) { this.estadoTo = estadoTo; }
     public Instant getChangedAt() { return changedAt; }
     public void setChangedAt(Instant changedAt) { this.changedAt = changedAt; }
+    public Usuario getMensajero() { return mensajero; }
+    public void setMensajero(Usuario mensajero) { this.mensajero = mensajero; }
     public String getMotivo() { return motivo; }
     public void setMotivo(String motivo) { this.motivo = motivo; }
     public String getChangedBy() { return changedBy; }

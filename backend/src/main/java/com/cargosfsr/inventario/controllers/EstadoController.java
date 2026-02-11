@@ -6,6 +6,7 @@ import java.util.Locale;
 import java.util.Map;
 
 import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -26,16 +27,19 @@ public class EstadoController {
         public String tracking; public String estado; public String motivo;
         public Boolean force; public Instant when;
         public String devolucionSubtipo; // ENRUTE | OTRAS_ZONAS | VENCIDOS | NO_ENTREGAR
+        public Long mensajeroId;        // requerido si estado = PRUEBA_DE_ENTREGA
     }
     public static class CambioEstadoTextoReq {
         public String texto; public String estado; public String motivo;
         public Boolean force; public Instant when;
         public String devolucionSubtipo;
+        public Long mensajeroId;        // requerido si estado = PRUEBA_DE_ENTREGA
     }
     public static class CambioEstadoBulkReq {
         public List<String> trackings; public String estado; public String motivo;
         public Boolean force; public Instant when;
         public String devolucionSubtipo;
+        public Long mensajeroId;        // requerido si estado = PRUEBA_DE_ENTREGA
     }
 
     // ====== STATUS EXTERNO ======
@@ -65,7 +69,7 @@ public class EstadoController {
         PaqueteEstado nuevo = parseEstado(body.estado);
         boolean force = body.force != null && body.force;
         return estadoService.actualizarEstadoPorTracking(
-                body.tracking, nuevo, body.motivo, null, force, body.when, body.devolucionSubtipo
+                body.tracking, nuevo, body.motivo, null, force, body.when, body.devolucionSubtipo, body.mensajeroId
         );
     }
 
@@ -76,7 +80,7 @@ public class EstadoController {
         PaqueteEstado nuevo = parseEstado(body.estado);
         boolean force = body.force != null && body.force;
         return estadoService.actualizarEstadoDesdeTexto(
-                body.texto, nuevo, body.motivo, null, force, body.when, body.devolucionSubtipo
+                body.texto, nuevo, body.motivo, null, force, body.when, body.devolucionSubtipo, body.mensajeroId
         );
     }
 
@@ -87,8 +91,14 @@ public class EstadoController {
         PaqueteEstado nuevo = parseEstado(body.estado);
         boolean force = body.force != null && body.force;
         return estadoService.actualizarEstadoBulk(
-                body.trackings, nuevo, body.motivo, null, force, body.when, body.devolucionSubtipo
+                body.trackings, nuevo, body.motivo, null, force, body.when, body.devolucionSubtipo, body.mensajeroId
         );
+    }
+
+    // ===== NUEVO: lista de mensajeros para selector =====
+    @GetMapping(path = "/mensajeros")
+    public List<Map<String, Object>> mensajeros() {
+        return estadoService.listarMensajerosActivos();
     }
 
     // ===== NUEVO: STATUS EXTERNO =====

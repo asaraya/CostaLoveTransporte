@@ -18,10 +18,12 @@ import org.springframework.util.StringUtils;
 import com.cargosfsr.inventario.auth.CurrentUser;
 import com.cargosfsr.inventario.model.Paquete;
 import com.cargosfsr.inventario.model.PaqueteEstadoHistorial;
+import com.cargosfsr.inventario.model.Usuario;
 import com.cargosfsr.inventario.model.enums.DevolucionSubtipo;
 import com.cargosfsr.inventario.model.enums.PaqueteEstado;
 import com.cargosfsr.inventario.repository.PaqueteEstadoHistorialRepository;
 import com.cargosfsr.inventario.repository.PaqueteRepository;
+import com.cargosfsr.inventario.repository.UsuarioRepository;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -36,16 +38,49 @@ public class EstadoService {
 
     private final PaqueteRepository paquetes;
     private final PaqueteEstadoHistorialRepository historial;
+    private final UsuarioRepository usuarios;
 
     @PersistenceContext
     private EntityManager em;
 
     public EstadoService(PaqueteRepository paquetes,
                          PaqueteEstadoHistorialRepository historial,
+                         UsuarioRepository usuarios,
                          CurrentUser currentUser) {
         this.currentUser = currentUser;
         this.paquetes = paquetes;
         this.historial = historial;
+        this.usuarios = usuarios;
+    }
+
+    private Usuario requireMensajero(Long mensajeroId) {
+        if (mensajeroId == null) {
+            throw new IllegalArgumentException("mensajeroId requerido para PRUEBA_DE_ENTREGA");
+        }
+        Usuario u = usuarios.findById(mensajeroId).orElseThrow(
+            () -> new IllegalArgumentException("No existe mensajero con id: " + mensajeroId)
+        );
+        if (u.getActive() != null && !u.getActive()) {
+            throw new IllegalArgumentException("El mensajero está inactivo: " + u.getFullName());
+        }
+        if (u.getRol() == null || !"MENSAJERO".equalsIgnoreCase(u.getRol())) {
+            throw new IllegalArgumentException("El usuario no tiene rol MENSAJERO: " + u.getFullName());
+        }
+        return u;
+    }
+
+    /** Lista mensajeros activos para que el FE muestre el selector */
+    public List<Map<String, Object>> listarMensajerosActivos() {
+        List<Usuario> list = usuarios.findByRolAndActiveTrueOrderByFullNameAsc("MENSAJERO");
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Usuario u : list) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", u.getId());
+            m.put("username", u.getUsername());
+            m.put("fullName", u.getFullName());
+            out.add(m);
+        }
+        return out;
     }
 
     private String actor(String changedByNullable) {
@@ -80,7 +115,8 @@ public class EstadoService {
                                                            String changedByIgnored,
                                                            boolean force,
                                                            Instant when,
-                                                           String devolucionSubtipoOpt) {
+                                                           String devolucionSubtipoOpt,
+                                                           Long mensajeroId) {
         if (!StringUtils.hasText(tracking)) throw new IllegalArgumentException("Tracking requerido");
         String t = tracking.trim().toUpperCase();
         if (!TRACKING_PATTERN.matcher(t).matches())
@@ -98,6 +134,9 @@ public class EstadoService {
 
         boolean touchedDelivered = false; // delivered_at = ENTREGADO a la PERSONA (PRUEBA_DE_ENTREGA)
         boolean touchedReturned  = false;
+        boolean touchedMensajero = false;
+
+        Usuario mensajero = null;
 
         DevolucionSubtipo sub = null;
         if (devolucionSubtipoOpt != null && !devolucionSubtipoOpt.isBlank()) {
@@ -110,6 +149,11 @@ public class EstadoService {
         // - NO_ENTREGABLE significa devolución => set returned_at
 
         if (nuevo == PaqueteEstado.PRUEBA_DE_ENTREGA) {
+            mensajero = requireMensajero(mensajeroId);
+            p.setMensajero(mensajero);
+            p.setResponsableConsolidado(mensajero.getFullName());
+            touchedMensajero = true;
+
             p.setDeliveredAt(ts);
             touchedDelivered = true;
 
@@ -119,6 +163,11 @@ public class EstadoService {
             }
 
         } else if (nuevo == PaqueteEstado.NO_ENTREGABLE) {
+            // si se marca como devolución, ya no aplica mensajero
+            if (p.getMensajero() != null) {
+                p.setMensajero(null);
+                touchedMensajero = true;
+            }
             p.setReturnedAt(ts);
             touchedReturned = true;
             p.setDevolucionSubtipo(sub != null ? sub : DevolucionSubtipo.FUERA_DE_RUTA);
@@ -128,6 +177,18 @@ public class EstadoService {
             if (p.getDeliveredAt() != null || p.getReturnedAt() != null) {
                 p.setDeliveredAt(null);
                 p.setReturnedAt(null);
+            }
+
+            // al resetear, también limpiamos mensajero
+            if (p.getMensajero() != null) {
+                p.setMensajero(null);
+                touchedMensajero = true;
+            }
+        } else {
+            // Cualquier otro estado NO es entrega final => no debe quedar mensajero en el paquete
+            if (p.getMensajero() != null) {
+                p.setMensajero(null);
+                touchedMensajero = true;
             }
         }
 
@@ -163,6 +224,15 @@ public class EstadoService {
         if (touchedDelivered) sql.append(", delivered_at = DATE_SUB(:ts, INTERVAL 6 HOUR)");
         if (touchedReturned)  sql.append(", returned_at  = DATE_SUB(:ts, INTERVAL 6 HOUR)");
 
+        // mensajero (solo aplica cuando PRUEBA_DE_ENTREGA)
+        if (touchedMensajero) {
+            if (nuevo == PaqueteEstado.PRUEBA_DE_ENTREGA) {
+                sql.append(", mensajero_id = :mensajeroId, responsable_consolidado = :mensajeroName");
+            } else {
+                sql.append(", mensajero_id = NULL");
+            }
+        }
+
         // si se marca como entregado a persona, limpia devolución
         if (nuevo == PaqueteEstado.PRUEBA_DE_ENTREGA) {
             sql.append(", returned_at = NULL");
@@ -175,11 +245,18 @@ public class EstadoService {
 
         sql.append(" WHERE id = :id");
 
-        em.createNativeQuery(sql.toString())
+        var q = em.createNativeQuery(sql.toString())
           .setParameter("ts", Timestamp.from(ts))
           .setParameter("who", user)
-          .setParameter("id", p.getId())
-          .executeUpdate();
+          .setParameter("id", p.getId());
+
+        // Solo bindeamos los parámetros si el SQL los incluye
+        if (touchedMensajero && nuevo == PaqueteEstado.PRUEBA_DE_ENTREGA) {
+            q.setParameter("mensajeroId", mensajero.getId());
+            q.setParameter("mensajeroName", mensajero.getFullName());
+        }
+
+        q.executeUpdate();
 
         PaqueteEstadoHistorial h = new PaqueteEstadoHistorial();
         h.setPaquete(p);
@@ -188,6 +265,11 @@ public class EstadoService {
         h.setChangedAt(ts);
         h.setMotivo(motivo);
         h.setChangedBy(user);
+
+        // guardar mensajero en historial cuando es entrega final
+        if (nuevo == PaqueteEstado.PRUEBA_DE_ENTREGA) {
+            h.setMensajero(mensajero);
+        }
         historial.save(h);
 
         em.createNativeQuery("""
@@ -207,6 +289,8 @@ public class EstadoService {
         out.put("delivered_at", p.getDeliveredAt());
         out.put("returned_at", p.getReturnedAt());
         out.put("devolucion_subtipo", p.getDevolucionSubtipo() != null ? p.getDevolucionSubtipo().name() : null);
+        out.put("mensajero_id", p.getMensajero() != null ? p.getMensajero().getId() : null);
+        out.put("mensajero", p.getMensajero() != null ? p.getMensajero().getFullName() : null);
         return out;
     }
 
@@ -218,9 +302,10 @@ public class EstadoService {
                                                           String changedByIgnored,
                                                           boolean force,
                                                           Instant when,
-                                                          String devolucionSubtipoOpt) {
+                                                          String devolucionSubtipoOpt,
+                                                          Long mensajeroId) {
         List<String> trackings = extraerTrackingsDesdeTexto(rawTrackings);
-        return actualizarEstadoBulk(trackings, nuevo, motivo, changedByIgnored, force, when, devolucionSubtipoOpt);
+        return actualizarEstadoBulk(trackings, nuevo, motivo, changedByIgnored, force, when, devolucionSubtipoOpt, mensajeroId);
     }
 
     @Transactional
@@ -231,7 +316,8 @@ public class EstadoService {
                                                     String changedByIgnored,
                                                     boolean force,
                                                     Instant when,
-                                                    String devolucionSubtipoOpt) {
+                                                    String devolucionSubtipoOpt,
+                                                    Long mensajeroId) {
         if (trackings == null || trackings.isEmpty())
             throw new IllegalArgumentException("Lista de trackings vacía");
 
@@ -239,7 +325,16 @@ public class EstadoService {
         List<Map<String,Object>> items = new ArrayList<>();
         for (String t : trackings) {
             try {
-                Map<String, Object> r = actualizarEstadoPorTracking(t, nuevo, motivo, changedByIgnored, force, when, devolucionSubtipoOpt);
+                Map<String, Object> r = actualizarEstadoPorTracking(
+                        t,
+                        nuevo,
+                        motivo,
+                        changedByIgnored,
+                        force,
+                        when,
+                        devolucionSubtipoOpt,
+                        mensajeroId
+                );
                 Map<String, Object> row = new LinkedHashMap<>();
                 row.put("tracking", t.toUpperCase());
                 row.put("ok", true);
