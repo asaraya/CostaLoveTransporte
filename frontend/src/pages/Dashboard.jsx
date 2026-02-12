@@ -10,11 +10,11 @@ const toCRISO = (yyyyMmDd, hh = '00', mm = '00', ss = '00') => {
 }
 
 const ESTADO_LABEL = {
-  PRUEBA_DE_ENTREGA: 'Prueba de entrega',
-  ENTREGADO_A_TRANSPORTISTA_LOCAL: 'Entregado a transportista local',
-  NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE: 'No entregado - Consignatario no disponible',
-  ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO: 'Entregado a transportista local - 2do intento',
-  NO_ENTREGABLE: 'No entregable - Retornado a oficina local',
+  PRUEBA_DE_ENTREGA: 'Prueba de entrega (POD)',
+  ENTREGADO_A_TRANSPORTISTA_LOCAL: 'Entregado a transportista local (Recibido)',
+  NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE: 'No entregado - Consignatario no disponible (Inventario)',
+  ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO: 'Entregado a transportista local - 2do intento (Inventario)',
+  NO_ENTREGABLE: 'No entregable - Retornado a oficina local (Devolución)',
 }
 
 const labelEstado = (code) => {
@@ -27,12 +27,6 @@ const ESTADOS_INVENTARIO = new Set([
   'ENTREGADO_A_TRANSPORTISTA_LOCAL',
   'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
   'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO',
-])
-
-// ✅ Fuera de inventario (ya se fue / devuelto)
-const ESTADOS_FUERA = new Set([
-  'PRUEBA_DE_ENTREGA', // entregado a persona (POD)
-  'NO_ENTREGABLE',     // devuelto a la compañía
 ])
 
 function normalizeByEstado(arr) {
@@ -53,12 +47,12 @@ export default function Dashboard() {
     new Intl.DateTimeFormat('en-CA', { timeZone: CR_TZ }).format(new Date())
   )
 
-  // === NUEVA SECCIÓN: Matriz mensual (tipo hoja) (MISMA QUE EL OTRO DASHBOARD) ===
+  // === Matriz mensual (tipo hoja) ===
   const [mesResumen, setMesResumen] = useState(() => {
     const hoy = new Intl.DateTimeFormat('en-CA', { timeZone: CR_TZ }).format(new Date())
     return hoy.slice(0, 7) // YYYY-MM
   })
-  const [matrizMes, setMatrizMes] = useState([]) // [{fecha, inventario, recibido, entregado, noEntregable, total}]
+  const [matrizMes, setMatrizMes] = useState([]) // [{fecha, inventario, recibido, entregado, enrutes, otras_zonas, vencidos, no_entregar, transporte, total}]
   const [loadingMes, setLoadingMes] = useState(false)
 
   const [summary, setSummary] = useState(null)
@@ -185,17 +179,10 @@ export default function Dashboard() {
     }
   }
 
-  // === Matriz mensual (tipo hoja) usando SOLO /dashboard/summary (sin inventar endpoints) ===
+  // === Matriz mensual (usa /reportes/diario) ===
   const cargarMatrizMes = async () => {
     if (!mesResumen) return
     setLoadingMes(true)
-
-    const toNumOrNull = (v) => {
-      if (v === null || v === undefined || v === '') return null
-      const n = Number(v)
-      return Number.isFinite(n) ? n : null
-    }
-
     try {
       const [yStr, mStr] = mesResumen.split('-')
       const year = parseInt(yStr, 10)
@@ -209,68 +196,96 @@ export default function Dashboard() {
 
       const daysInMonth = new Date(year, month, 0).getDate()
 
-      // Para "Inventario" (inicio del día 1): usamos el cierre del día anterior al mes
-      let prevTotal = null
-      try {
-        const firstDay = `${yStr}-${mStr}-01`
-        const prev = new Date(`${firstDay}T00:00:00Z`)
-        prev.setUTCDate(prev.getUTCDate() - 1)
-        const prevYmd = prev.toISOString().slice(0, 10)
-
-        const prevRes = await api.get('/dashboard/summary', { params: { fecha: prevYmd } })
-        prevTotal = calcInventarioDesdeByEstado(prevRes.data?.byEstado)
-      } catch {
-        prevTotal = null
-      }
-
       const requests = []
       for (let day = 1; day <= daysInMonth; day++) {
         const dStr = String(day).padStart(2, '0')
         const fechaDia = `${yStr}-${mStr}-${dStr}`
 
         requests.push(
-          api.get('/dashboard/summary', { params: { fecha: fechaDia } })
+          api.get('/reportes/diario', { params: { fecha: fechaDia, flat: true } })
             .then(res => ({ fecha: fechaDia, raw: res.data }))
             .catch(() => ({ fecha: fechaDia, raw: null }))
         )
       }
 
       const results = await Promise.all(requests)
-      results.sort((a, b) => a.fecha.localeCompare(b.fecha)) // asc para encadenar inventario
+
+      const normalize = (raw) => {
+        if (!raw) return {}
+
+        // unwrap para SimpleJdbcCall:
+        // 1) raw = [ { ... } ]
+        // 2) raw = { "#result-set-1": [ { ... } ], ... }
+        // 3) raw = { ... } (ya plano)
+        const unwrapRow = (value) => {
+          if (!value) return null
+          if (Array.isArray(value)) return value[0] ?? null
+
+          if (typeof value === 'object') {
+            const rsKey = Object.keys(value).find(k => /^#result-set-\d+$/i.test(k))
+            if (rsKey && Array.isArray(value[rsKey])) return value[rsKey][0] ?? null
+            if (Array.isArray(value.result)) return value.result[0] ?? null
+            if (Array.isArray(value.rows)) return value.rows[0] ?? null
+          }
+          return value
+        }
+
+        const data = unwrapRow(raw) || {}
+
+        const toNumber = (value) => {
+          if (value === null || value === undefined || value === '') return null
+          const n = Number(value)
+          return Number.isFinite(n) ? n : value
+        }
+
+        const getField = (...keys) => {
+          for (const k of keys) {
+            if (Object.prototype.hasOwnProperty.call(data, k) && data[k] != null) {
+              return toNumber(data[k])
+            }
+          }
+          return null
+        }
+
+        return {
+          // inventario del día (generalmente inventario inicial)
+          inventario: getField('inventario', 'INVENTARIO', 'inv_inicial', 'inventario_inicial'),
+
+          // ✅ RECIBIDO: entran por primera vez (estado inicial ENTREGADO_A_TRANSPORTISTA_LOCAL)
+          recibido: getField('recibido', 'RECIBIDO', 'recibidos', 'RECIBIDOS'),
+
+          // ✅ ENTREGADO (POD): estado PRUEBA_DE_ENTREGA
+          entregado: getField(
+            'entregado', 'ENTREGADO',
+            'pod', 'POD',
+            'prueba_de_entrega', 'PRUEBA_DE_ENTREGA'
+          ),
+
+          // devoluciones por subtipo (si el SP las provee)
+          enrutes: getField('enrutes', 'ENRUTES', 'dev_enrute', 'DEV_ENRUTE', 'devoluciones_enrute'),
+          otras_zonas: getField('otras_zonas', 'OTRAS_ZONAS', 'dev_otras_zonas', 'DEV_OTRAS_ZONAS'),
+          vencidos: getField('vencidos', 'VENCIDOS', 'dev_vencidos', 'DEV_VENCIDOS'),
+
+          // ✅ NO ENTREGABLE (DEVOLUCIÓN): estado NO_ENTREGABLE
+          no_entregar: getField(
+            'no_entregar', 'NO_ENTREGAR',
+            'no_entregable', 'NO_ENTREGABLE',
+            'dev_no_entregable', 'DEV_NO_ENTREGABLE',
+            'devolucion', 'DEVOLUCION',
+            'devoluciones', 'DEVOLUCIONES'
+          ),
+
+          // transporte (si aplica)
+          transporte: getField('transporte', 'TRANSPORTE', 'dev_transporte', 'DEV_TRANSPORTE'),
+
+          // total (según el SP: inventario final / total del día)
+          total: getField('total', 'TOTAL', 'inv_final', 'inventario_final')
+        }
+      }
 
       const rows = results.map(({ fecha, raw }) => {
-        if (!raw) {
-          return {
-            fecha,
-            inventario: prevTotal,
-            recibido: null,
-            entregado: null,
-            noEntregable: null,
-            total: null,
-          }
-        }
-
-        const hoy = raw?.hoy ?? {}
-        const invFinal = calcInventarioDesdeByEstado(raw?.byEstado)
-
-        const row = {
-          fecha,
-          // inventario inicial = cierre del día anterior (encadenado)
-          inventario: prevTotal,
-          // movimientos del día
-          recibido: toNumOrNull(hoy?.recibidos),
-          // entregado a persona (POD) -> hoy.entregados (según tu dashboard)
-          entregado: toNumOrNull(hoy?.entregados),
-          // devuelto a compañía (NO_ENTREGABLE) (según tu summary existente)
-          noEntregable: toNumOrNull(hoy?.noEntregable ?? hoy?.no_entregable ?? hoy?.devoluciones),
-          // total = inventario cierre del día
-          total: invFinal,
-        }
-
-        // actualizar "prevTotal" solo si tenemos un invFinal válido
-        if (invFinal !== null && invFinal !== undefined) prevTotal = invFinal
-
-        return row
+        const norm = normalize(raw)
+        return { fecha, ...norm }
       })
 
       setMatrizMes(rows)
@@ -282,7 +297,7 @@ export default function Dashboard() {
     }
   }
 
-  // Cargar matriz del mes actual al entrar y cuando cambie el mes
+  // cargar matriz del mes actual al entrar y cuando cambie el mes
   useEffect(() => {
     cargarMatrizMes()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -332,6 +347,7 @@ export default function Dashboard() {
     if (to === 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' && r.received_at) return r.received_at
     if ((to === 'ENTREGADO_A_TRANSPORTISTA_LOCAL' || to === 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO') && r.delivered_at) return r.delivered_at
     if (to === 'NO_ENTREGABLE' && r.returned_at) return r.returned_at
+    if (to === 'PRUEBA_DE_ENTREGA' && (r.delivered_at || r.changed_at || r.changedAt)) return (r.delivered_at ?? r.changed_at ?? r.changedAt)
 
     return r.changed_at ?? r.changedAt ?? null
   }
@@ -350,10 +366,9 @@ export default function Dashboard() {
 
       const recibidos = Array.isArray(data) ? data : []
 
-      const entregados = recibidos.filter(r => {
-        const est = String(r?.estado ?? '').toUpperCase()
-        return est === 'ENTREGADO_A_TRANSPORTISTA_LOCAL' || est === 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'
-      })
+      const entregados = recibidos.filter(r =>
+        String(r?.estado ?? '').toUpperCase() === 'PRUEBA_DE_ENTREGA'
+      )
 
       const noEntregados = recibidos.filter(r =>
         String(r?.estado ?? '').toUpperCase() === 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'
@@ -383,8 +398,7 @@ export default function Dashboard() {
   // ✅ En inventario “real” (según estados correctos)
   const inventarioRealHoy = summary ? calcInventarioDesdeByEstado(summary.byEstado) : 0
 
-  const fmtCell = (v) =>
-    v === null || v === undefined || v === '' ? '-' : v
+  const fmtCell = (v) => (v === null || v === undefined || v === '' ? '-' : v)
 
   return (
     <div>
@@ -404,7 +418,6 @@ export default function Dashboard() {
       {summary && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 12 }}>
           <Kpi title="Paquetes totales" value={summary.totales?.paquetes ?? summary.totalPaquetes ?? 0} />
-          {/* ✅ En inventario recalculado correctamente */}
           <Kpi title="En inventario" value={inventarioRealHoy ?? 0} />
         </div>
       )}
@@ -413,9 +426,9 @@ export default function Dashboard() {
       {summary && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 12 }}>
           <Kpi title={`Recibidos ${summary.fecha ?? fecha}`} value={summary.hoy?.recibidos ?? 0} />
-          <Kpi title={`Entregados ${summary.fecha ?? fecha}`} value={summary.hoy?.entregados ?? 0} />
+          <Kpi title={`Entregados (POD) ${summary.fecha ?? fecha}`} value={summary.hoy?.entregados ?? 0} />
           <Kpi
-            title={`No entregables ${summary.fecha ?? fecha}`}
+            title={`No entregables (Devolución) ${summary.fecha ?? fecha}`}
             value={summary.hoy?.noEntregable ?? summary.hoy?.no_entregable ?? summary.hoy?.devoluciones ?? 0}
           />
         </div>
@@ -518,10 +531,10 @@ export default function Dashboard() {
               No entregados ({pfData.noEntregados.length})
             </button>
             <button onClick={() => setTabPF('ENTREGADOS')} style={tabBtnStyle(tabPF === 'ENTREGADOS')}>
-              Entregados ({pfData.entregados.length})
+              Entregados (POD) ({pfData.entregados.length})
             </button>
             <button onClick={() => setTabPF('NO_ENTREGABLES')} style={tabBtnStyle(tabPF === 'NO_ENTREGABLES')}>
-              No entregables ({pfData.noEntregables.length})
+              No entregables (Devolución) ({pfData.noEntregables.length})
             </button>
           </div>
         </div>
@@ -564,7 +577,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* === NUEVA SECCIÓN: Resumen mensual (matriz tipo hoja) (MISMA UI QUE TU REFERENCIA) === */}
+      {/* === RESUMEN MENSUAL (MISMA POSICIÓN/ESTILO QUE TU REFERENCIA) === */}
       <div style={{ marginTop: 16 }}>
         <h4>Resumen mensual (matriz tipo hoja)</h4>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
@@ -589,15 +602,19 @@ export default function Dashboard() {
                   <th style={th}>Fecha</th>
                   <th style={th}>Inventario</th>
                   <th style={th}>Recibido</th>
-                  <th style={th}>Entregado</th>
-                  <th style={th}>No entregable</th>
+                  <th style={th}>Entregado (POD)</th>
+                  <th style={th}>Enrutes</th>
+                  <th style={th}>Otras zonas</th>
+                  <th style={th}>Vencidos</th>
+                  <th style={th}>No entregable (Devolución)</th>
+                  <th style={th}>Transporte</th>
                   <th style={th}>Total</th>
                 </tr>
               </thead>
               <tbody>
                 {matrizMes.length === 0 ? (
                   <tr>
-                    <td colSpan={6} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>
+                    <td colSpan={10} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>
                       Sin datos para el mes seleccionado
                     </td>
                   </tr>
@@ -607,7 +624,11 @@ export default function Dashboard() {
                     <td style={td}>{fmtCell(r.inventario)}</td>
                     <td style={td}>{fmtCell(r.recibido)}</td>
                     <td style={td}>{fmtCell(r.entregado)}</td>
-                    <td style={td}>{fmtCell(r.noEntregable)}</td>
+                    <td style={td}>{fmtCell(r.enrutes)}</td>
+                    <td style={td}>{fmtCell(r.otras_zonas)}</td>
+                    <td style={td}>{fmtCell(r.vencidos)}</td>
+                    <td style={td}>{fmtCell(r.no_entregar)}</td>
+                    <td style={td}>{fmtCell(r.transporte)}</td>
                     <td style={td}>{fmtCell(r.total)}</td>
                   </tr>
                 ))}
