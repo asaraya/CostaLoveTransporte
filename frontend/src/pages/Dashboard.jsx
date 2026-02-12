@@ -261,15 +261,43 @@ export default function Dashboard() {
           return null
         }
 
+        const fueraDeRuta = getField(
+          'fuera_de_ruta', 'FUERA_DE_RUTA', 'fuera_ruta', 'FUERA_RUTA',
+          'dev_fuera_de_ruta', 'DEV_FUERA_DE_RUTA',
+          'enrutes', 'ENRUTES', 'dev_enrute', 'DEV_ENRUTE', 'devoluciones_enrute'
+        )
+
+        const vencidos = getField(
+          'vencidos', 'VENCIDOS', 'dev_vencidos', 'DEV_VENCIDOS'
+        )
+
+        const dosIntentos = getField(
+          'dos_intentos', 'DOS_INTENTOS', 'dev_dos_intentos', 'DEV_DOS_INTENTOS',
+          'segundo_intento', 'SEGUNDO_INTENTO', '2_intentos', 'DOS_INTENTOS',
+          'otras_zonas', 'OTRAS_ZONAS', 'dev_otras_zonas', 'DEV_OTRAS_ZONAS'
+        )
+
+        const totalDevDirecto = getField(
+          'no_entregar', 'NO_ENTREGAR',
+          'no_entregable', 'NO_ENTREGABLE',
+          'dev_no_entregable', 'DEV_NO_ENTREGABLE',
+          'devolucion', 'DEVOLUCION',
+          'devoluciones', 'DEVOLUCIONES'
+        )
+
+        const anySubtype = (fueraDeRuta != null) || (vencidos != null) || (dosIntentos != null)
+        const totalDevFallback = anySubtype
+          ? (Number(fueraDeRuta ?? 0) + Number(vencidos ?? 0) + Number(dosIntentos ?? 0))
+          : null
+
         return {
           inventario: getField('inventario', 'INVENTARIO', 'inv_inicial', 'inventario_inicial'),
           recibido: getField('recibido', 'RECIBIDO', 'recibidos', 'RECIBIDOS'),
           entregado: getField('entregado', 'ENTREGADO', 'pod', 'POD', 'prueba_de_entrega', 'PRUEBA_DE_ENTREGA'),
-          enrutes: getField('enrutes', 'ENRUTES', 'dev_enrute', 'DEV_ENRUTE', 'devoluciones_enrute'),
-          otras_zonas: getField('otras_zonas', 'OTRAS_ZONAS', 'dev_otras_zonas', 'DEV_OTRAS_ZONAS'),
-          vencidos: getField('vencidos', 'VENCIDOS', 'dev_vencidos', 'DEV_VENCIDOS'),
-          no_entregar: getField('no_entregar', 'NO_ENTREGAR', 'no_entregable', 'NO_ENTREGABLE', 'dev_no_entregable', 'DEV_NO_ENTREGABLE', 'devolucion', 'DEVOLUCION', 'devoluciones', 'DEVOLUCIONES'),
-          transporte: getField('transporte', 'TRANSPORTE', 'dev_transporte', 'DEV_TRANSPORTE'),
+          fuera_de_ruta: fueraDeRuta,
+          vencidos,
+          dos_intentos: dosIntentos,
+          no_entregar: totalDevDirecto != null ? totalDevDirecto : totalDevFallback,
           total: getField('total', 'TOTAL', 'inv_final', 'inventario_final')
         }
       }
@@ -601,18 +629,17 @@ export default function Dashboard() {
                   <th style={th}>Inventario</th>
                   <th style={th}>Recibido</th>
                   <th style={th}>Entregado (POD)</th>
-                  <th style={th}>Enrutes</th>
-                  <th style={th}>Otras zonas</th>
+                  <th style={th}>Fuera de ruta</th>
                   <th style={th}>Vencidos</th>
+                  <th style={th}>2 intentos</th>
                   <th style={th}>No entregable (Devolución)</th>
-                  <th style={th}>Transporte</th>
                   <th style={th}>Total</th>
                 </tr>
               </thead>
               <tbody>
                 {matrizMes.length === 0 ? (
                   <tr>
-                    <td colSpan={10} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>
+                    <td colSpan={9} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>
                       Sin datos para el mes seleccionado
                     </td>
                   </tr>
@@ -622,11 +649,10 @@ export default function Dashboard() {
                     <td style={td}>{fmtCell(r.inventario)}</td>
                     <td style={td}>{fmtCell(r.recibido)}</td>
                     <td style={td}>{fmtCell(r.entregado)}</td>
-                    <td style={td}>{fmtCell(r.enrutes)}</td>
-                    <td style={td}>{fmtCell(r.otras_zonas)}</td>
+                    <td style={td}>{fmtCell(r.fuera_de_ruta)}</td>
                     <td style={td}>{fmtCell(r.vencidos)}</td>
+                    <td style={td}>{fmtCell(r.dos_intentos)}</td>
                     <td style={td}>{fmtCell(r.no_entregar)}</td>
-                    <td style={td}>{fmtCell(r.transporte)}</td>
                     <td style={td}>{fmtCell(r.total)}</td>
                   </tr>
                 ))}
