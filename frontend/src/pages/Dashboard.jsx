@@ -31,8 +31,8 @@ const ESTADOS_INVENTARIO = new Set([
 
 // ✅ Fuera de inventario (ya se fue / devuelto)
 const ESTADOS_FUERA = new Set([
-  'PRUEBA_DE_ENTREGA',
-  'NO_ENTREGABLE',
+  'PRUEBA_DE_ENTREGA', // entregado a persona (POD)
+  'NO_ENTREGABLE',     // devuelto a la compañía
 ])
 
 function normalizeByEstado(arr) {
@@ -53,12 +53,13 @@ export default function Dashboard() {
     new Intl.DateTimeFormat('en-CA', { timeZone: CR_TZ }).format(new Date())
   )
 
-  // ✅ Resumen mensual (matriz tipo hoja)
-  const [mes, setMes] = useState(() => {
+  // === NUEVA SECCIÓN: Matriz mensual (tipo hoja) (MISMA QUE EL OTRO DASHBOARD) ===
+  const [mesResumen, setMesResumen] = useState(() => {
     const hoy = new Intl.DateTimeFormat('en-CA', { timeZone: CR_TZ }).format(new Date())
     return hoy.slice(0, 7) // YYYY-MM
   })
-  const [mensual, setMensual] = useState({ rows: [], loading: false, error: null })
+  const [matrizMes, setMatrizMes] = useState([]) // [{fecha, inventario, recibido, entregado, noEntregable, total}]
+  const [loadingMes, setLoadingMes] = useState(false)
 
   const [summary, setSummary] = useState(null)
   const [topDistritos, setTopDistritos] = useState([])
@@ -184,85 +185,111 @@ export default function Dashboard() {
     }
   }
 
-  // ✅ Resumen mensual (matriz tipo hoja) – SOLO usando /dashboard/summary existente
-  const getDaysInMonth = (yyyyMm) => {
-    const [yStr, mStr] = String(yyyyMm || '').split('-')
-    const y = Number(yStr)
-    const m = Number(mStr) // 1..12
-    if (!y || !m) return []
-    const last = new Date(Date.UTC(y, m, 0)).getUTCDate() // día final del mes
-    const out = []
-    for (let d = 1; d <= last; d++) {
-      const dd = String(d).padStart(2, '0')
-      out.push(`${yStr}-${mStr}-${dd}`)
-    }
-    return out
-  }
+  // === Matriz mensual (tipo hoja) usando SOLO /dashboard/summary (sin inventar endpoints) ===
+  const cargarMatrizMes = async () => {
+    if (!mesResumen) return
+    setLoadingMes(true)
 
-  const mapWithConcurrency = async (items, limit, fn) => {
-    const results = new Array(items.length)
-    let idx = 0
-    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (idx < items.length) {
-        const current = idx++
-        results[current] = await fn(items[current], current)
-      }
-    })
-    await Promise.all(workers)
-    return results
-  }
-
-  const cargarResumenMensual = async () => {
-    const days = getDaysInMonth(mes)
-    if (!days.length) {
-      setMensual({ rows: [], loading: false, error: null })
-      return
+    const toNumOrNull = (v) => {
+      if (v === null || v === undefined || v === '') return null
+      const n = Number(v)
+      return Number.isFinite(n) ? n : null
     }
 
-    setMensual({ rows: [], loading: true, error: null })
     try {
-      const rows = await mapWithConcurrency(days, 6, async (ymd) => {
-        const { data } = await api.get('/dashboard/summary', { params: { fecha: ymd } })
+      const [yStr, mStr] = mesResumen.split('-')
+      const year = parseInt(yStr, 10)
+      const month = parseInt(mStr, 10) // 1-12
 
-        // movimientos del día (según summary.hoy)
-        const hoyObj = data?.hoy ?? {}
-        const recibidos = Number(hoyObj?.recibidos ?? 0) || 0
+      if (!year || !month) {
+        setMatrizMes([])
+        setLoadingMes(false)
+        return
+      }
 
-        // “ya no están con nosotros”:
-        // - PRUEBA_DE_ENTREGA: normalmente cae en "entregados" del summary del día
-        const pruebaEntrega = Number(hoyObj?.entregados ?? 0) || 0
+      const daysInMonth = new Date(year, month, 0).getDate()
 
-        // - NO_ENTREGABLE: puede venir como noEntregable/no_entregable/devoluciones
-        const noEntregable =
-          Number(hoyObj?.noEntregable ?? hoyObj?.no_entregable ?? hoyObj?.devoluciones ?? 0) || 0
+      // Para "Inventario" (inicio del día 1): usamos el cierre del día anterior al mes
+      let prevTotal = null
+      try {
+        const firstDay = `${yStr}-${mStr}-01`
+        const prev = new Date(`${firstDay}T00:00:00Z`)
+        prev.setUTCDate(prev.getUTCDate() - 1)
+        const prevYmd = prev.toISOString().slice(0, 10)
 
-        // inventario al cierre: sumatoria correcta por estado (NO depende de inventarioActual)
-        const invCierre = calcInventarioDesdeByEstado(data?.byEstado)
+        const prevRes = await api.get('/dashboard/summary', { params: { fecha: prevYmd } })
+        prevTotal = calcInventarioDesdeByEstado(prevRes.data?.byEstado)
+      } catch {
+        prevTotal = null
+      }
 
-        return {
-          ymd,
-          dia: ymd.slice(8, 10),
-          recibidos,
-          pruebaEntrega,
-          noEntregable,
-          salieron: pruebaEntrega + noEntregable,
-          inventarioCierre: invCierre,
+      const requests = []
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dStr = String(day).padStart(2, '0')
+        const fechaDia = `${yStr}-${mStr}-${dStr}`
+
+        requests.push(
+          api.get('/dashboard/summary', { params: { fecha: fechaDia } })
+            .then(res => ({ fecha: fechaDia, raw: res.data }))
+            .catch(() => ({ fecha: fechaDia, raw: null }))
+        )
+      }
+
+      const results = await Promise.all(requests)
+      results.sort((a, b) => a.fecha.localeCompare(b.fecha)) // asc para encadenar inventario
+
+      const rows = results.map(({ fecha, raw }) => {
+        if (!raw) {
+          return {
+            fecha,
+            inventario: prevTotal,
+            recibido: null,
+            entregado: null,
+            noEntregable: null,
+            total: null,
+          }
         }
+
+        const hoy = raw?.hoy ?? {}
+        const invFinal = calcInventarioDesdeByEstado(raw?.byEstado)
+
+        const row = {
+          fecha,
+          // inventario inicial = cierre del día anterior (encadenado)
+          inventario: prevTotal,
+          // movimientos del día
+          recibido: toNumOrNull(hoy?.recibidos),
+          // entregado a persona (POD) -> hoy.entregados (según tu dashboard)
+          entregado: toNumOrNull(hoy?.entregados),
+          // devuelto a compañía (NO_ENTREGABLE) (según tu summary existente)
+          noEntregable: toNumOrNull(hoy?.noEntregable ?? hoy?.no_entregable ?? hoy?.devoluciones),
+          // total = inventario cierre del día
+          total: invFinal,
+        }
+
+        // actualizar "prevTotal" solo si tenemos un invFinal válido
+        if (invFinal !== null && invFinal !== undefined) prevTotal = invFinal
+
+        return row
       })
 
-      setMensual({ rows, loading: false, error: null })
+      setMatrizMes(rows)
     } catch (e) {
-      setMensual({
-        rows: [],
-        loading: false,
-        error: e?.response?.data?.message || e?.message || 'Error cargando resumen mensual',
-      })
+      alert(e?.response?.data?.message || e?.message || 'Error cargando matriz mensual')
+      setMatrizMes([])
+    } finally {
+      setLoadingMes(false)
     }
   }
+
+  // Cargar matriz del mes actual al entrar y cuando cambie el mes
+  useEffect(() => {
+    cargarMatrizMes()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mesResumen])
 
   useEffect(() => { cargarTopDistritos() }, [])
   useEffect(() => { cargarFecha() }, [fecha])
-  useEffect(() => { cargarResumenMensual() }, [mes])
 
   // ✅ Modal: paquetes del distrito (EN INVENTARIO)
   const openDistritoModal = async (distrito) => {
@@ -356,14 +383,8 @@ export default function Dashboard() {
   // ✅ En inventario “real” (según estados correctos)
   const inventarioRealHoy = summary ? calcInventarioDesdeByEstado(summary.byEstado) : 0
 
-  // Totales del mes (para el footer de la matriz)
-  const mensualTotales = mensual.rows.reduce((acc, r) => {
-    acc.recibidos += r.recibidos
-    acc.pruebaEntrega += r.pruebaEntrega
-    acc.noEntregable += r.noEntregable
-    acc.salieron += r.salieron
-    return acc
-  }, { recibidos: 0, pruebaEntrega: 0, noEntregable: 0, salieron: 0 })
+  const fmtCell = (v) =>
+    v === null || v === undefined || v === '' ? '-' : v
 
   return (
     <div>
@@ -374,86 +395,9 @@ export default function Dashboard() {
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} />
         </label>
 
-        {/* ✅ Selector del mes para Resumen Mensual */}
-        <label>Mes:
-          <input
-            type="month"
-            value={mes}
-            onChange={e => setMes(e.target.value)}
-            style={{ marginLeft: 6 }}
-          />
-        </label>
-
         <button onClick={cargarTodo} disabled={loading}>
           {loading ? 'Actualizando…' : 'Actualizar'}
         </button>
-      </div>
-
-      {/* ✅ Resumen mensual (matriz tipo hoja) */}
-      <div style={{ marginBottom: 16 }}>
-        <h4 style={{ marginBottom: 8 }}>Resumen mensual (matriz)</h4>
-
-        {mensual.loading && (
-          <div style={{ padding: 10, opacity: .8 }}>Cargando resumen mensual…</div>
-        )}
-        {!!mensual.error && (
-          <div style={{ padding: 10, color: '#b00020' }}>{mensual.error}</div>
-        )}
-
-        {!mensual.loading && !mensual.error && (
-          <div style={{ border: '1px solid rgba(22,62,122,.15)', borderRadius: 10, overflow: 'hidden' }}>
-            <div style={{ maxHeight: 420, overflow: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ background: '#f3f7ff' }}>
-                    <th style={th}>Día</th>
-                    <th style={th}>Recibidos</th>
-                    <th style={th}>Prueba de entrega (salieron)</th>
-                    <th style={th}>No entregable (salieron)</th>
-                    <th style={th}>Total salieron</th>
-                    <th style={th}>En inventario (cierre)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {mensual.rows.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>
-                        Sin datos para el mes seleccionado
-                      </td>
-                    </tr>
-                  ) : mensual.rows.map((r) => (
-                    <tr key={r.ymd} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
-                      <td style={td}>{r.dia}</td>
-                      <td style={td}>{r.recibidos}</td>
-                      <td style={td}>{r.pruebaEntrega}</td>
-                      <td style={td}>{r.noEntregable}</td>
-                      <td style={td}>{r.salieron}</td>
-                      <td style={td}><strong>{r.inventarioCierre}</strong></td>
-                    </tr>
-                  ))}
-                </tbody>
-                {mensual.rows.length > 0 && (
-                  <tfoot>
-                    <tr style={{ background: '#fbfcff', borderTop: '2px solid rgba(22,62,122,.15)' }}>
-                      <td style={{ ...td, fontWeight: 800 }}>TOTAL</td>
-                      <td style={{ ...td, fontWeight: 800 }}>{mensualTotales.recibidos}</td>
-                      <td style={{ ...td, fontWeight: 800 }}>{mensualTotales.pruebaEntrega}</td>
-                      <td style={{ ...td, fontWeight: 800 }}>{mensualTotales.noEntregable}</td>
-                      <td style={{ ...td, fontWeight: 800 }}>{mensualTotales.salieron}</td>
-                      <td style={{ ...td, fontWeight: 800 }}>
-                        {mensual.rows[mensual.rows.length - 1]?.inventarioCierre ?? 0}
-                      </td>
-                    </tr>
-                  </tfoot>
-                )}
-              </table>
-            </div>
-            <div style={{ padding: 10, fontSize: 12, opacity: .8 }}>
-              * “En inventario (cierre)” = suma de estados: ENTREGADO_A_TRANSPORTISTA_LOCAL, NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE, ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO.
-              PRUEBA_DE_ENTREGA y NO_ENTREGABLE se consideran “ya no están con nosotros”.
-            </div>
-          </div>
-        )}
       </div>
 
       {/* KPIs */}
@@ -612,6 +556,59 @@ export default function Dashboard() {
                     <td style={td}>{r.content_description ?? '-'}</td>
                     <td style={td}>{labelEstado(r.estado)}</td>
                     <td style={td}>{fmtDT(r[currentPFDateKey])}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* === NUEVA SECCIÓN: Resumen mensual (matriz tipo hoja) (MISMA UI QUE TU REFERENCIA) === */}
+      <div style={{ marginTop: 16 }}>
+        <h4>Resumen mensual (matriz tipo hoja)</h4>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+          <label>Mes:
+            <input
+              type="month"
+              value={mesResumen}
+              onChange={e => setMesResumen(e.target.value)}
+              style={{ marginLeft: 4 }}
+            />
+          </label>
+          <button onClick={cargarMatrizMes} disabled={loadingMes || !mesResumen}>
+            {loadingMes ? 'Cargando…' : 'Ver mes'}
+          </button>
+        </div>
+
+        <div style={{ border: '1px solid rgba(22,62,122,.15)', borderRadius: 8, padding: 8 }}>
+          <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={th}>Fecha</th>
+                  <th style={th}>Inventario</th>
+                  <th style={th}>Recibido</th>
+                  <th style={th}>Entregado</th>
+                  <th style={th}>No entregable</th>
+                  <th style={th}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {matrizMes.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>
+                      Sin datos para el mes seleccionado
+                    </td>
+                  </tr>
+                ) : matrizMes.map((r) => (
+                  <tr key={r.fecha} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+                    <td style={td}>{r.fecha}</td>
+                    <td style={td}>{fmtCell(r.inventario)}</td>
+                    <td style={td}>{fmtCell(r.recibido)}</td>
+                    <td style={td}>{fmtCell(r.entregado)}</td>
+                    <td style={td}>{fmtCell(r.noEntregable)}</td>
+                    <td style={td}>{fmtCell(r.total)}</td>
                   </tr>
                 ))}
               </tbody>
