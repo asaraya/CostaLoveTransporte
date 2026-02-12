@@ -3,7 +3,6 @@ import { api } from '../api'
 
 const CR_TZ = 'America/Costa_Rica'
 
-// YYYY-MM-DD -> ISO con offset CR fijo (-06:00)
 const toCRISO = (yyyyMmDd, hh = '00', mm = '00', ss = '00') => {
   if (!yyyyMmDd) return null
   return `${yyyyMmDd}T${hh}:${mm}:${ss}-06:00`
@@ -22,7 +21,6 @@ const labelEstado = (code) => {
   return ESTADO_LABEL[k] || (code ?? '-')
 }
 
-// ✅ EN INVENTARIO = SOLO estos 3 estados (siguen con nosotros)
 const ESTADOS_INVENTARIO = new Set([
   'ENTREGADO_A_TRANSPORTISTA_LOCAL',
   'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
@@ -47,21 +45,19 @@ export default function Dashboard() {
     new Intl.DateTimeFormat('en-CA', { timeZone: CR_TZ }).format(new Date())
   )
 
-  // === Matriz mensual (tipo hoja) ===
   const [mesResumen, setMesResumen] = useState(() => {
     const hoy = new Intl.DateTimeFormat('en-CA', { timeZone: CR_TZ }).format(new Date())
-    return hoy.slice(0, 7) // YYYY-MM
+    return hoy.slice(0, 7)
   })
-  const [matrizMes, setMatrizMes] = useState([]) // [{fecha, inventario, recibido, entregado, enrutes, otras_zonas, vencidos, no_entregar, transporte, total}]
+  const [matrizMes, setMatrizMes] = useState([])
   const [loadingMes, setLoadingMes] = useState(false)
 
   const [summary, setSummary] = useState(null)
   const [topDistritos, setTopDistritos] = useState([])
-  const [ultimosRec, setUltimosRec] = useState([])
+  const [topTransportistas, setTopTransportistas] = useState([])
   const [ultimosMov, setUltimosMov] = useState([])
   const [loading, setLoading] = useState(false)
 
-  // ✅ Modal: paquetes por distrito (EN INVENTARIO)
   const [distModal, setDistModal] = useState({
     open: false,
     distrito: '',
@@ -70,11 +66,19 @@ export default function Dashboard() {
     error: null,
   })
 
-  // Ver paquetes por fecha (por recepción REAL)
+  const [transModal, setTransModal] = useState({
+    open: false,
+    mensajeroId: null,
+    transportista: '',
+    rows: [],
+    loading: false,
+    error: null,
+  })
+
   const [fechaPF, setFechaPF] = useState(() =>
     new Intl.DateTimeFormat('en-CA', { timeZone: CR_TZ }).format(new Date())
   )
-  const [tabPF, setTabPF] = useState('RECIBIDOS') // RECIBIDOS | NO_ENTREGADOS | ENTREGADOS | NO_ENTREGABLES
+  const [tabPF, setTabPF] = useState('RECIBIDOS')
   const [pfData, setPfData] = useState({
     recibidos: [],
     noEntregados: [],
@@ -87,7 +91,6 @@ export default function Dashboard() {
     try {
       const { data } = await api.get('/dashboard/top-distritos', { params: { limit: 100000 } })
       const arr = Array.isArray(data) ? data : []
-
       const normalized = arr
         .map((r) => ({
           distrito:
@@ -111,14 +114,23 @@ export default function Dashboard() {
   const cargarFecha = async () => {
     setLoading(true)
     try {
-      const [s, r, m] = await Promise.all([
+      const [s, t, m] = await Promise.all([
         api.get('/dashboard/summary', { params: { fecha } }),
-        api.get('/dashboard/ultimos-recibidos', { params: { limit: 10, fecha } }),
+        api.get('/dashboard/top-transportistas', { params: { limit: 100000, fecha } }),
         api.get('/dashboard/ultimos-movimientos', { params: { fecha, limit: 100000 } }),
       ])
 
       setSummary(s.data)
-      setUltimosRec(Array.isArray(r.data) ? r.data : [])
+
+      const tArr = Array.isArray(t.data) ? t.data : []
+      const tNorm = tArr.map(x => ({
+        mensajero_id: Number(x?.mensajero_id ?? x?.mensajeroId ?? 0) || 0,
+        transportista: x?.transportista ?? x?.full_name ?? x?.nombre ?? '',
+        cantidad: Number(x?.cantidad ?? x?.total ?? x?.count ?? 0) || 0,
+      })).filter(x => x.transportista && x.mensajero_id)
+
+      tNorm.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0) || String(a.transportista).localeCompare(String(b.transportista)))
+      setTopTransportistas(tNorm)
 
       const movSrc = Array.isArray(m.data) ? m.data : []
       const movHoy = movSrc.sort((a, b) => {
@@ -137,10 +149,10 @@ export default function Dashboard() {
   const cargarTodo = async () => {
     setLoading(true)
     try {
-      const [s, u, r, m] = await Promise.all([
+      const [s, u, t, m] = await Promise.all([
         api.get('/dashboard/summary', { params: { fecha } }),
         api.get('/dashboard/top-distritos', { params: { limit: 100000 } }),
-        api.get('/dashboard/ultimos-recibidos', { params: { limit: 10, fecha } }),
+        api.get('/dashboard/top-transportistas', { params: { limit: 100000, fecha } }),
         api.get('/dashboard/ultimos-movimientos', { params: { fecha, limit: 100000 } }),
       ])
 
@@ -163,7 +175,15 @@ export default function Dashboard() {
       normalized.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0))
       setTopDistritos(normalized)
 
-      setUltimosRec(Array.isArray(r.data) ? r.data : [])
+      const tArr = Array.isArray(t.data) ? t.data : []
+      const tNorm = tArr.map(x => ({
+        mensajero_id: Number(x?.mensajero_id ?? x?.mensajeroId ?? 0) || 0,
+        transportista: x?.transportista ?? x?.full_name ?? x?.nombre ?? '',
+        cantidad: Number(x?.cantidad ?? x?.total ?? x?.count ?? 0) || 0,
+      })).filter(x => x.transportista && x.mensajero_id)
+
+      tNorm.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0) || String(a.transportista).localeCompare(String(b.transportista)))
+      setTopTransportistas(tNorm)
 
       const movSrc = Array.isArray(m.data) ? m.data : []
       const movHoy = movSrc.sort((a, b) => {
@@ -179,14 +199,13 @@ export default function Dashboard() {
     }
   }
 
-  // === Matriz mensual (usa /reportes/diario) ===
   const cargarMatrizMes = async () => {
     if (!mesResumen) return
     setLoadingMes(true)
     try {
       const [yStr, mStr] = mesResumen.split('-')
       const year = parseInt(yStr, 10)
-      const month = parseInt(mStr, 10) // 1-12
+      const month = parseInt(mStr, 10)
 
       if (!year || !month) {
         setMatrizMes([])
@@ -213,14 +232,9 @@ export default function Dashboard() {
       const normalize = (raw) => {
         if (!raw) return {}
 
-        // unwrap para SimpleJdbcCall:
-        // 1) raw = [ { ... } ]
-        // 2) raw = { "#result-set-1": [ { ... } ], ... }
-        // 3) raw = { ... } (ya plano)
         const unwrapRow = (value) => {
           if (!value) return null
           if (Array.isArray(value)) return value[0] ?? null
-
           if (typeof value === 'object') {
             const rsKey = Object.keys(value).find(k => /^#result-set-\d+$/i.test(k))
             if (rsKey && Array.isArray(value[rsKey])) return value[rsKey][0] ?? null
@@ -248,37 +262,14 @@ export default function Dashboard() {
         }
 
         return {
-          // inventario del día (generalmente inventario inicial)
           inventario: getField('inventario', 'INVENTARIO', 'inv_inicial', 'inventario_inicial'),
-
-          // ✅ RECIBIDO: entran por primera vez (estado inicial ENTREGADO_A_TRANSPORTISTA_LOCAL)
           recibido: getField('recibido', 'RECIBIDO', 'recibidos', 'RECIBIDOS'),
-
-          // ✅ ENTREGADO (POD): estado PRUEBA_DE_ENTREGA
-          entregado: getField(
-            'entregado', 'ENTREGADO',
-            'pod', 'POD',
-            'prueba_de_entrega', 'PRUEBA_DE_ENTREGA'
-          ),
-
-          // devoluciones por subtipo (si el SP las provee)
+          entregado: getField('entregado', 'ENTREGADO', 'pod', 'POD', 'prueba_de_entrega', 'PRUEBA_DE_ENTREGA'),
           enrutes: getField('enrutes', 'ENRUTES', 'dev_enrute', 'DEV_ENRUTE', 'devoluciones_enrute'),
           otras_zonas: getField('otras_zonas', 'OTRAS_ZONAS', 'dev_otras_zonas', 'DEV_OTRAS_ZONAS'),
           vencidos: getField('vencidos', 'VENCIDOS', 'dev_vencidos', 'DEV_VENCIDOS'),
-
-          // ✅ NO ENTREGABLE (DEVOLUCIÓN): estado NO_ENTREGABLE
-          no_entregar: getField(
-            'no_entregar', 'NO_ENTREGAR',
-            'no_entregable', 'NO_ENTREGABLE',
-            'dev_no_entregable', 'DEV_NO_ENTREGABLE',
-            'devolucion', 'DEVOLUCION',
-            'devoluciones', 'DEVOLUCIONES'
-          ),
-
-          // transporte (si aplica)
+          no_entregar: getField('no_entregar', 'NO_ENTREGAR', 'no_entregable', 'NO_ENTREGABLE', 'dev_no_entregable', 'DEV_NO_ENTREGABLE', 'devolucion', 'DEVOLUCION', 'devoluciones', 'DEVOLUCIONES'),
           transporte: getField('transporte', 'TRANSPORTE', 'dev_transporte', 'DEV_TRANSPORTE'),
-
-          // total (según el SP: inventario final / total del día)
           total: getField('total', 'TOTAL', 'inv_final', 'inventario_final')
         }
       }
@@ -297,16 +288,13 @@ export default function Dashboard() {
     }
   }
 
-  // cargar matriz del mes actual al entrar y cuando cambie el mes
   useEffect(() => {
     cargarMatrizMes()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesResumen])
 
   useEffect(() => { cargarTopDistritos() }, [])
   useEffect(() => { cargarFecha() }, [fecha])
 
-  // ✅ Modal: paquetes del distrito (EN INVENTARIO)
   const openDistritoModal = async (distrito) => {
     setDistModal({ open: true, distrito, rows: [], loading: true, error: null })
     try {
@@ -332,27 +320,46 @@ export default function Dashboard() {
 
   const closeDistritoModal = () => setDistModal(prev => ({ ...prev, open: false }))
 
-  // Cerrar con ESC
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') closeDistritoModal() }
-    if (distModal.open) window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [distModal.open])
+  const openTransportistaModal = async (mensajeroId, transportista) => {
+    setTransModal({ open: true, mensajeroId, transportista, rows: [], loading: true, error: null })
+    try {
+      const { data } = await api.get('/dashboard/pods-transportista', {
+        params: { mensajeroId, fecha, limit: 100000 }
+      })
+      const arr = Array.isArray(data) ? data : []
+      const rows = arr.sort((a, b) => new Date(b?.delivered_at ?? 0).getTime() - new Date(a?.delivered_at ?? 0).getTime())
+      setTransModal(prev => ({ ...prev, rows, loading: false }))
+    } catch (e) {
+      setTransModal(prev => ({
+        ...prev,
+        loading: false,
+        error: e?.response?.data?.message || e?.message || 'Error cargando paquetes'
+      }))
+    }
+  }
 
-  // Fecha lógica del movimiento según el estado destino
+  const closeTransportistaModal = () => setTransModal(prev => ({ ...prev, open: false }))
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        if (distModal.open) closeDistritoModal()
+        if (transModal.open) closeTransportistaModal()
+      }
+    }
+    if (distModal.open || transModal.open) window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [distModal.open, transModal.open])
+
   function movFechaOficial(r) {
     if (!r) return null
     const to = String(r.estado_to ?? r.estadoTo ?? '').toUpperCase()
-
     if (to === 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' && r.received_at) return r.received_at
-    if ((to === 'ENTREGADO_A_TRANSPORTISTA_LOCAL' || to === 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO') && r.delivered_at) return r.delivered_at
     if (to === 'NO_ENTREGABLE' && r.returned_at) return r.returned_at
     if (to === 'PRUEBA_DE_ENTREGA' && (r.delivered_at || r.changed_at || r.changedAt)) return (r.delivered_at ?? r.changed_at ?? r.changedAt)
-
     return r.changed_at ?? r.changedAt ?? null
   }
 
-  // Paquetes por fecha (recepción REAL)
   const cargarPorFecha = async () => {
     if (!fechaPF) return
     setPfLoading(true)
@@ -394,10 +401,7 @@ export default function Dashboard() {
   })()
 
   const currentPFDateKey = 'received_at'
-
-  // ✅ En inventario “real” (según estados correctos)
   const inventarioRealHoy = summary ? calcInventarioDesdeByEstado(summary.byEstado) : 0
-
   const fmtCell = (v) => (v === null || v === undefined || v === '' ? '-' : v)
 
   return (
@@ -414,7 +418,6 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {/* KPIs */}
       {summary && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 12 }}>
           <Kpi title="Paquetes totales" value={summary.totales?.paquetes ?? summary.totalPaquetes ?? 0} />
@@ -422,7 +425,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Hoy */}
       {summary && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 12 }}>
           <Kpi title={`Recibidos ${summary.fecha ?? fecha}`} value={summary.hoy?.recibidos ?? 0} />
@@ -434,7 +436,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Por estado */}
       {summary && (
         <div style={{ marginBottom: 16 }}>
           <h4>Paquetes por estado</h4>
@@ -481,38 +482,36 @@ export default function Dashboard() {
         </div>
 
         <div>
-          <h4>Últimos recibidos</h4>
+          <h4>Paquetes por transportista</h4>
+
           <table border="1" cellPadding="6" width="100%">
-            <thead>
-              <tr>
-                <th>Tracking</th>
-                <th>Marchamo</th>
-                <th>Distrito</th>
-                <th>Recibido (real)</th>
-                <th>Último cambio</th>
-                <th>Estado</th>
-              </tr>
-            </thead>
+            <thead><tr><th>Transportista</th><th>Cantidad</th></tr></thead>
             <tbody>
-              {ultimosRec.map((r) => (
-                <tr key={r.id}>
-                  <td>{r.tracking_code}</td>
-                  <td>{r.marchamo}</td>
-                  <td>{r.distrito_nombre ?? '-'}</td>
-                  <td>{fmtDT(r.received_at)}</td>
-                  <td>{fmtDT(r.last_state_change_at ?? r.changed_at ?? r.changedAt)}</td>
-                  <td>{labelEstado(r.estado)}</td>
+              {topTransportistas.map((r, i) => (
+                <tr key={r.mensajero_id ?? i}>
+                  <td>
+                    <button
+                      onClick={() => openTransportistaModal(r.mensajero_id, r.transportista)}
+                      style={{
+                        background: 'none', border: 'none', color: '#0b66c3',
+                        textDecoration: 'underline', padding: 0, cursor: 'pointer'
+                      }}
+                      title="Ver paquetes POD de este transportista"
+                    >
+                      {r.transportista}
+                    </button>
+                  </td>
+                  <td>{r.cantidad}</td>
                 </tr>
               ))}
-              {!ultimosRec.length && (
-                <tr><td colSpan={6} style={{ textAlign: 'center', opacity: .7 }}>Sin datos</td></tr>
+              {!topTransportistas.length && (
+                <tr><td colSpan={2} style={{ textAlign: 'center', opacity: .7 }}>Sin datos</td></tr>
               )}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Ver paquetes por fecha */}
       <div style={{ marginTop: 16 }}>
         <h4>Ver paquetes por fecha (según recepción REAL)</h4>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
@@ -577,7 +576,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* === RESUMEN MENSUAL (MISMA POSICIÓN/ESTILO QUE TU REFERENCIA) === */}
       <div style={{ marginTop: 16 }}>
         <h4>Resumen mensual (matriz tipo hoja)</h4>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
@@ -638,7 +636,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Movimientos */}
       <div style={{ marginTop: 16 }}>
         <h4>Movimientos de estado del {fecha}</h4>
         <div style={{ maxHeight: 340, overflowY: 'auto' }}>
@@ -670,7 +667,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ✅ MODAL: Paquetes por distrito (EN INVENTARIO) */}
       {distModal.open && (
         <div
           onClick={closeDistritoModal}
@@ -715,6 +711,63 @@ export default function Dashboard() {
                           <td style={td}>{r.distrito_nombre ?? '-'}</td>
                           <td style={td}>{labelEstado(r.estado)}</td>
                           <td style={td}>{fmtDT(r.received_at)}</td>
+                        </tr>
+                      )) : (
+                        <tr><td colSpan={5} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>Sin resultados</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {transModal.open && (
+        <div
+          onClick={closeTransportistaModal}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+          }}
+        >
+          <div onClick={e => e.stopPropagation()} style={blueCard}>
+            <button onClick={closeTransportistaModal} aria-label="Cerrar" title="Cerrar" style={closeBtn}>×</button>
+
+            <h4 style={{ margin: '0 0 10px', color: '#fff' }}>
+              POD por: <span style={{ fontWeight: 800 }}>{transModal.transportista}</span>
+              <span style={pill}>PRUEBA DE ENTREGA</span>
+            </h4>
+
+            {transModal.loading && <div style={{ padding: 8, color: '#e8f0ff' }}>Cargando paquetes…</div>}
+            {transModal.error && <div style={{ padding: 8, color: '#ffdde0' }}>{transModal.error}</div>}
+
+            {!transModal.loading && !transModal.error && (
+              <>
+                <div style={{ marginBottom: 8, opacity: .9, color: '#e8f0ff' }}>
+                  Total: {transModal.rows.length}
+                </div>
+
+                <div style={{ overflow: 'auto', maxHeight: '65vh', border: '1px solid rgba(255,255,255,.35)', borderRadius: 8, background: '#fff' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: '#f3f7ff' }}>
+                        <th style={th}>Tracking</th>
+                        <th style={th}>Marchamo</th>
+                        <th style={th}>Distrito</th>
+                        <th style={th}>Estado</th>
+                        <th style={th}>Entregado</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {transModal.rows.length ? transModal.rows.map((r, idx) => (
+                        <tr key={r.id ?? r.tracking_code ?? idx} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+                          <td style={td}>{r.tracking_code}</td>
+                          <td style={td}>{r.marchamo}</td>
+                          <td style={td}>{r.distrito_nombre ?? '-'}</td>
+                          <td style={td}>{labelEstado(r.estado)}</td>
+                          <td style={td}>{fmtDT(r.delivered_at)}</td>
                         </tr>
                       )) : (
                         <tr><td colSpan={5} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>Sin resultados</td></tr>

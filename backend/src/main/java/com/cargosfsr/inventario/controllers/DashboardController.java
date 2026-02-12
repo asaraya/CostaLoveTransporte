@@ -133,47 +133,90 @@ public class DashboardController {
         limit);
   }
 
-  @GetMapping("/ultimos-recibidos")
-  public List<Map<String, Object>> ultimosRecibidos(
-      @RequestParam(value = "limit", defaultValue = "20") int limit,
+  @GetMapping("/top-transportistas")
+  public List<Map<String, Object>> topTransportistas(
+      @RequestParam(value = "limit", defaultValue = "10") int limit,
       @RequestParam(value = "fecha", required = false) String fecha) {
 
-    String base =
-        """
-        SELECT p.id, p.tracking_code, v.marchamo, v.distrito_nombre, p.estado, p.received_at,
-               h.changed_at AS entrada_disponible_at
-        FROM paquete_estado_historial h
-        JOIN paquetes p ON p.id = h.paquete_id
-        JOIN vw_paquete_resumen v ON v.id = p.id
-        WHERE h.estado_to = 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'
-          AND (h.estado_from IS NULL OR h.estado_from <> 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE')
-        """;
+    String dIni = null;
+    String dFinExcl = null;
+    String marker = null;
 
-    String orderLimit = " ORDER BY h.changed_at DESC, h.id DESC LIMIT ? ";
-
-    if (fecha == null || fecha.isBlank()) {
-      String sql = base + "\n" + orderLimit;
-      return jdbc.query(
-          sql,
-          (rs, i) -> {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("id", rs.getLong("id"));
-            m.put("tracking_code", rs.getString("tracking_code"));
-            m.put("marchamo", rs.getString("marchamo"));
-            m.put("distrito_nombre", rs.getString("distrito_nombre"));
-            m.put("estado", rs.getString("estado"));
-            m.put("received_at", rs.getTimestamp("received_at"));
-            m.put("entrada_disponible_at", rs.getTimestamp("entrada_disponible_at"));
-            return m;
-          },
-          limit);
+    if (fecha != null && !fecha.isBlank()) {
+      LocalDate d = LocalDate.parse(fecha);
+      dIni = d + " 00:00:00";
+      dFinExcl = d.plusDays(1) + " 00:00:00";
+      marker = dIni;
     }
 
-    LocalDate d = LocalDate.parse(fecha);
-    String dIni = d + " 00:00:00";
-    String dFinExcl = d.plusDays(1) + " 00:00:00";
+    String sql =
+        """
+        SELECT u.id AS mensajero_id,
+               u.full_name AS transportista,
+               COALESCE(COUNT(p.id), 0) AS cantidad
+        FROM usuarios u
+        LEFT JOIN paquetes p
+          ON p.mensajero_id = u.id
+         AND p.estado = 'PRUEBA_DE_ENTREGA'
+         AND (? IS NULL OR (p.delivered_at >= ? AND p.delivered_at < ?))
+        WHERE u.rol = 'MENSAJERO'
+        GROUP BY u.id, u.full_name
+        ORDER BY cantidad DESC, transportista ASC
+        LIMIT ?
+        """;
 
-    String sql = base + " AND p.received_at >= ? AND p.received_at < ? " + "\n" + orderLimit;
+    return jdbc.query(
+        sql,
+        (rs, i) -> {
+          Map<String, Object> m = new LinkedHashMap<>();
+          m.put("mensajero_id", rs.getLong("mensajero_id"));
+          m.put("transportista", rs.getString("transportista"));
+          m.put("cantidad", rs.getInt("cantidad"));
+          return m;
+        },
+        marker,
+        dIni,
+        dFinExcl,
+        limit);
+  }
+
+  @GetMapping("/pods-transportista")
+  public List<Map<String, Object>> podsPorTransportista(
+      @RequestParam("mensajeroId") long mensajeroId,
+      @RequestParam(value = "limit", defaultValue = "100000") int limit,
+      @RequestParam(value = "fecha", required = false) String fecha) {
+
+    String dIni = null;
+    String dFinExcl = null;
+    String marker = null;
+
+    if (fecha != null && !fecha.isBlank()) {
+      LocalDate d = LocalDate.parse(fecha);
+      dIni = d + " 00:00:00";
+      dFinExcl = d.plusDays(1) + " 00:00:00";
+      marker = dIni;
+    }
+
+    String sql =
+        """
+        SELECT p.id,
+               p.tracking_code,
+               s.marchamo,
+               d.nombre AS distrito_nombre,
+               p.estado,
+               p.delivered_at,
+               p.recipient_name,
+               p.recipient_phone,
+               p.recipient_address
+        FROM paquetes p
+        JOIN sacos s ON s.id = p.saco_id
+        JOIN distritos d ON d.id = p.distrito_id
+        WHERE p.estado = 'PRUEBA_DE_ENTREGA'
+          AND p.mensajero_id = ?
+          AND (? IS NULL OR (p.delivered_at >= ? AND p.delivered_at < ?))
+        ORDER BY p.delivered_at DESC, p.id DESC
+        LIMIT ?
+        """;
 
     return jdbc.query(
         sql,
@@ -184,10 +227,14 @@ public class DashboardController {
           m.put("marchamo", rs.getString("marchamo"));
           m.put("distrito_nombre", rs.getString("distrito_nombre"));
           m.put("estado", rs.getString("estado"));
-          m.put("received_at", rs.getTimestamp("received_at"));
-          m.put("entrada_disponible_at", rs.getTimestamp("entrada_disponible_at"));
+          m.put("delivered_at", rs.getTimestamp("delivered_at"));
+          m.put("recipient_name", rs.getString("recipient_name"));
+          m.put("recipient_phone", rs.getString("recipient_phone"));
+          m.put("recipient_address", rs.getString("recipient_address"));
           return m;
         },
+        mensajeroId,
+        marker,
         dIni,
         dFinExcl,
         limit);
