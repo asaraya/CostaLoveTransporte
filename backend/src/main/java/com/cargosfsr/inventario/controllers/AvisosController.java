@@ -1,5 +1,6 @@
 package com.cargosfsr.inventario.controllers;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -147,7 +148,7 @@ public class AvisosController {
     public Map<String, Object> countAvisos(@RequestParam("tipo") String tipo) {
         AvisoTipo t = parseTipo(tipo);
         AvisoRule r = rule(t);
-        if (r == null) return Map.of("count", 0);
+        if (r == null) return Map.of("total", 0);
 
         LocalDate today = LocalDate.now();
         DateWindow w = windowFor(today, r);
@@ -167,7 +168,7 @@ public class AvisosController {
         }
 
         Long c = jdbc.queryForObject(sql.toString(), Long.class, args.toArray());
-        return Map.of("count", c == null ? 0 : c);
+        return Map.of("total", c == null ? 0 : c);
     }
 
     @PostMapping("/avisos/aplicar")
@@ -201,9 +202,12 @@ public class AvisosController {
         return estadoService.actualizarEstadoBulk(
                 trackings,
                 r.estadoSugerido,
-                "AVISOS: " + tipo,
                 null,
-                false
+                "AVISOS: " + tipo,
+                false,
+                Instant.now(),
+                null,
+                (Long) null
         );
     }
 }
