@@ -88,9 +88,9 @@ const DEV_SUB_LABEL = Object.fromEntries(DEV_SUBS.map(x => [x.key, x.label]))
 
 // === Avisos ===
 const AVISO_TABS = [
-  { key: 'INTENTO_1',    label: 'Actualizar a intento 1', minDias: 3 },
-  { key: 'INTENTO_2',    label: 'Actualizar a intento 2', minDias: 4 },
-  { key: 'NO_ENTREGABLE',label: 'Actualizar a no entregables', minDias: 7 },
+  { key: 'INTENTO_1',     label: 'No entregado - consignatario no disponible', rango: '3 días' },
+  { key: 'INTENTO_2',     label: 'Entregado a transportista local - 2do intento', rango: '4-6 días' },
+  { key: 'NO_ENTREGABLE', label: 'No entregable - retornado a oficina local', rango: '7+ días' },
 ]
 
 /* Helper de TZ local (CR) para display */
@@ -263,6 +263,7 @@ export default function Inventario() {
 
   // Avisos
   const [avisoTab, setAvisoTab] = useState('INTENTO_1')
+  const [aplicandoAviso, setAplicandoAviso] = useState(false)
 
   // Total global
   const [totalCount, setTotalCount] = useState(0)
@@ -469,6 +470,35 @@ export default function Inventario() {
     }
   }
 
+  const aplicarStatusSugerido = async () => {
+    if (searchType !== 'aviso') return
+    const current = AVISO_TABS.find(t => t.key === avisoTab)
+    const label = current?.label || 'status sugerido'
+    if (!confirm(`¿Cambiar TODOS los paquetes listados a: "${label}"?`)) return
+
+    setAplicandoAviso(true)
+    try {
+      const { data } = await api.post('/busqueda/avisos/aplicar', null, { params: { tipo: avisoTab } })
+      const total = Number(data?.total ?? 0)
+      const ok = Number(data?.ok ?? 0)
+      const fail = Number(data?.fail ?? 0)
+
+      if (total === 0) toast('No hay paquetes para actualizar')
+      else if (fail > 0) toast(`Actualizados: ${ok}/${total}. Fallidos: ${fail}`)
+      else toast.success(`Actualizados: ${ok}/${total}`)
+
+      setOffset(0)
+      await Promise.all([
+        fetchTotalCount({ searchType: 'aviso', avisoTab }),
+        buscar(0, { searchType: 'aviso', avisoTab })
+      ])
+    } catch (e) {
+      toast.error(e?.response?.data?.message || e?.message || 'Error cambiando estados')
+    } finally {
+      setAplicandoAviso(false)
+    }
+  }
+
   /* Exportar por marchamo (usa filas mostradas) */
   const generarReporteMarchamo = () => {
     const marchamo = (query || '').trim()
@@ -545,9 +575,9 @@ export default function Inventario() {
       const wb = XLSX.utils.book_new()
 
       const sheets = [
-        { label: 'Actualizar a intento 1', rows: rowsI1 },
-        { label: 'Actualizar a intento 2', rows: rowsI2 },
-        { label: 'Actualizar a no entregables', rows: rowsNE },
+        { label: 'No entregado - consignatario no disponible (3 días)', rows: rowsI1 },
+        { label: 'Entregado a transportista local - 2do intento (4-6 días)', rows: rowsI2 },
+        { label: 'No entregable - retornado a oficina local (7+ días)', rows: rowsNE },
       ]
 
       for (const s of sheets) {
@@ -615,9 +645,9 @@ export default function Inventario() {
                 className={`toggle ${avisoTab === t.key ? 'is-selected' : ''}`}
                 aria-pressed={avisoTab === t.key}
                 onClick={() => handleAvisoTabClick(t.key)}
-                title={`Muestra paquetes con ${t.minDias}+ días desde recepción pendientes de este cambio`}
+                title={`Muestra paquetes que deberían cambiar a: ${t.label} (${t.rango})`}
               >
-                {t.label}
+                {t.label} ({t.rango})
               </button>
             ))}
 
@@ -628,6 +658,15 @@ export default function Inventario() {
               title="Descarga un Excel con 3 hojas (una por tipo de aviso)"
             >
               Descargar reporte de avisos
+            </button>
+
+            <button
+              onClick={aplicarStatusSugerido}
+              disabled={loading || aplicandoAviso || totalCount === 0}
+              style={{ marginLeft: 8 }}
+              title="Cambia en lote todos los paquetes listados al status sugerido"
+            >
+              Cambiar a status sugerido
             </button>
           </>
         )}
