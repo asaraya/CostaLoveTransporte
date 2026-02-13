@@ -15,7 +15,10 @@ export default function AdminProfile() {
     role: "USER",
   });
 
-  // ✅ Distritos (reemplaza agregar/eliminar mueble)
+  // ✅ Crear mensajero (solo nombre -> llama SP vía backend: POST /admin/mensajeros)
+  const [mForm, setMForm] = useState({ fullName: "" });
+
+  // ✅ Distritos
   const [distritos, setDistritos] = useState([]);
   const [dForm, setDForm] = useState({ nombre: "" });
   const [delDistrito, setDelDistrito] = useState("");
@@ -115,6 +118,33 @@ export default function AdminProfile() {
       setMsg("Usuario creado");
     } catch (err) {
       setMsg(err?.response?.data?.message || "Error creando usuario");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ✅ Crear mensajero: solo nombre -> backend llama SP sp_crear_mensajero
+  const normalizeNombre = (s) => (s ?? "").trim();
+
+  const onCreateMensajero = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setMsg("");
+
+    const fullName = normalizeNombre(mForm.fullName);
+    if (!fullName) {
+      setMsg("Nombre inválido");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      await api.post("/admin/mensajeros", { fullName });
+      setMForm({ fullName: "" });
+      await loadUsers();
+      setMsg("Mensajero creado");
+    } catch (err) {
+      setMsg(err?.response?.data?.message || "Error creando mensajero");
     } finally {
       setLoading(false);
     }
@@ -250,6 +280,33 @@ export default function AdminProfile() {
           </div>
           <button disabled={loading} type="submit" style={{ marginTop: 10 }}>
             Agregar
+          </button>
+        </form>
+
+        {/* ✅ Opción: agregar mensajero (solo nombre) - llama SP vía backend */}
+        <form
+          onSubmit={onCreateMensajero}
+          style={{
+            border: "1px solid #eee",
+            padding: 16,
+            gridColumn: "1 / -1", // ocupa ambas columnas
+          }}
+        >
+          <h2>Agregar mensajero (rápido)</h2>
+          <div>
+            <label>Nombre completo</label>
+            <input
+              value={mForm.fullName}
+              onChange={(e) => setMForm({ fullName: e.target.value })}
+              placeholder='Ej: "Andrés Salas"'
+              required
+            />
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>
+            Crea usuario automáticamente (username, NOLOGIN, role TRANSPORTISTA, rol MENSAJERO) llamando el SP.
+          </div>
+          <button disabled={loading} type="submit" style={{ marginTop: 10 }}>
+            Crear mensajero
           </button>
         </form>
       </section>

@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -58,6 +59,37 @@ public class AdminController {
         String hash = bcrypt.encode(req.password);
         jdbc.update("CALL sp_crear_usuario(?,?,?,?)", username, fullName, hash, role);
         return Map.of("ok", true, "username", username, "role", role);
+    }
+
+    /**
+     * Crea un "mensajero/transportista" con solo el nombre.
+     * Requiere el SP: sp_crear_mensajero(IN p_full_name VARCHAR(150))
+     *
+     * POST /api/admin/mensajeros
+     * body: { "fullName": "Andrés Salas" }  (o { "nombre": "Andrés Salas" })
+     */
+    @PostMapping("/mensajeros")
+    public Map<String, Object> createMensajero(@RequestBody CreateMensajeroReq req) {
+        String fullName = StringUtils.hasText(req.fullName) ? req.fullName.trim()
+                        : (req.nombre == null ? null : req.nombre.trim());
+
+        if (!StringUtils.hasText(fullName) || fullName.length() > 150) {
+            throw new IllegalArgumentException("Nombre inválido");
+        }
+
+        try {
+            // El SP debe: username auto + password NOLOGIN + role TRANSPORTISTA + rol MENSAJERO
+            Map<String, Object> row = jdbc.queryForMap("CALL sp_crear_mensajero(?)", fullName);
+            return Map.of("ok", true, "user", row);
+
+        } catch (DuplicateKeyException dk) {
+            // En teoría el SP resuelve colisiones con sufijos; esto cubriría casos raros de concurrencia.
+            return Map.of("ok", false, "message", "No se pudo crear: username duplicado");
+        } catch (DataAccessException ex) {
+            // Captura SIGNAL SQLSTATE '45000' del SP y otros errores JDBC
+            String msg = (ex.getMostSpecificCause() != null) ? ex.getMostSpecificCause().getMessage() : ex.getMessage();
+            throw new IllegalArgumentException(msg);
+        }
     }
 
     @DeleteMapping("/users/{username}")
@@ -188,6 +220,11 @@ public class AdminController {
         public String fullName;
         public String password;
         public String role; // USER | ADMIN | TRANSPORTISTA
+    }
+
+    public static class CreateMensajeroReq {
+        public String fullName; // recomendado
+        public String nombre;   // opcional (por compatibilidad con front)
     }
 
     public static class AddDistritoReq {
