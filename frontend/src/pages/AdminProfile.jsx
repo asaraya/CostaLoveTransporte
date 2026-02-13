@@ -292,7 +292,7 @@ export default function AdminProfile() {
             gridColumn: "1 / -1", // ocupa ambas columnas
           }}
         >
-          <h2>Agregar mensajero (rápido)</h2>
+          <h2>Agregar mensajero</h2>
           <div>
             <label>Nombre completo</label>
             <input
@@ -301,9 +301,6 @@ export default function AdminProfile() {
               placeholder='Ej: "Andrés Salas"'
               required
             />
-          </div>
-          <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>
-            Crea usuario automáticamente (username, NOLOGIN, role TRANSPORTISTA, rol MENSAJERO) llamando el SP.
           </div>
           <button disabled={loading} type="submit" style={{ marginTop: 10 }}>
             Crear mensajero

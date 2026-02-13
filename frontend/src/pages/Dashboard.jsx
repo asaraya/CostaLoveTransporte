@@ -510,7 +510,7 @@ export default function Dashboard() {
         </div>
 
         <div>
-          <h4>Paquetes por transportista</h4>
+          <h4>Paquetes por mensajero</h4>
 
           <table border="1" cellPadding="6" width="100%">
             <thead><tr><th>Transportista</th><th>Cantidad</th></tr></thead>
