@@ -219,9 +219,6 @@ export default function Recepcion() {
                   <option key={x} value={x}>{x}</option>
                 ))}
               </select>
-              <div style={{ fontSize: 12, opacity: .75 }}>
-                * Cada paquete queda ligado a un Distrito (reemplaza el concepto de “Mueble/Ubicación”).
-              </div>
             </label>
 
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
