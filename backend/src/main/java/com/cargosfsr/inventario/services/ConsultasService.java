@@ -406,46 +406,79 @@ public class ConsultasService {
         Timestamp dIni = Timestamp.valueOf(fecha.atStartOfDay());
         Timestamp dFin = Timestamp.valueOf(fecha.plusDays(1).atStartOfDay());
 
-        final String sql = """
+        // ✅ CAMBIO ÚNICO: el resumen mensual debe respetar el estado ACTUAL.
+        // - inventario/total: solo estados considerados EN_INVENTARIO (3 estados)
+        // - entregado: solo estados ENTREGADO* (pero excluyendo los 3 estados de inventario)
+        // - no_entregable y subtipos: solo estado NO_ENTREGABLE*
+        final String sql = String.format(Locale.ROOT, """
             SELECT
               ? AS fecha,
 
-              /* inventario al INICIO del día (paquetes vigentes) */
+              /* inventario al INICIO del día (según estado actual) */
               (SELECT COUNT(*)
                  FROM paquetes
                 WHERE received_at < ?
-                  AND (delivered_at IS NULL OR delivered_at >= ?)
-                  AND (returned_at  IS NULL OR returned_at  >= ?)
+                  AND estado IN %s
               ) AS inventario,
 
               /* eventos del día */
               (SELECT COUNT(*) FROM paquetes WHERE received_at  >= ? AND received_at  < ?) AS recibido,
-              (SELECT COUNT(*) FROM paquetes WHERE delivered_at >= ? AND delivered_at < ?) AS entregado,
 
-              /* no entregable del día + breakdown por subtipo */
-              (SELECT COUNT(*) FROM paquetes WHERE returned_at >= ? AND returned_at < ?) AS no_entregable,
-              (SELECT COUNT(*) FROM paquetes WHERE returned_at >= ? AND returned_at < ? AND devolucion_subtipo = 'FUERA_DE_RUTA') AS fuera_de_ruta,
-              (SELECT COUNT(*) FROM paquetes WHERE returned_at >= ? AND returned_at < ? AND devolucion_subtipo = 'VENCIDOS')      AS vencidos,
-              (SELECT COUNT(*) FROM paquetes WHERE returned_at >= ? AND returned_at < ? AND devolucion_subtipo = 'DOS_INTENTOS')  AS dos_intentos,
+              /* entregado del día (según estado actual; excluye estados "de inventario") */
+              (SELECT COUNT(*)
+                 FROM paquetes
+                WHERE delivered_at >= ? AND delivered_at < ?
+                  AND estado LIKE 'ENTREGADO%%'
+                  AND estado NOT IN %s
+              ) AS entregado,
 
-              /* inventario al CIERRE del día */
+              /* no entregable del día (según estado actual) + breakdown por subtipo */
+              (SELECT COUNT(*)
+                 FROM paquetes
+                WHERE returned_at >= ? AND returned_at < ?
+                  AND estado LIKE 'NO_ENTREGABLE%%'
+              ) AS no_entregable,
+
+              (SELECT COUNT(*)
+                 FROM paquetes
+                WHERE returned_at >= ? AND returned_at < ?
+                  AND estado LIKE 'NO_ENTREGABLE%%'
+                  AND devolucion_subtipo = 'FUERA_DE_RUTA'
+              ) AS fuera_de_ruta,
+
+              (SELECT COUNT(*)
+                 FROM paquetes
+                WHERE returned_at >= ? AND returned_at < ?
+                  AND estado LIKE 'NO_ENTREGABLE%%'
+                  AND devolucion_subtipo = 'VENCIDOS'
+              ) AS vencidos,
+
+              (SELECT COUNT(*)
+                 FROM paquetes
+                WHERE returned_at >= ? AND returned_at < ?
+                  AND estado LIKE 'NO_ENTREGABLE%%'
+                  AND devolucion_subtipo = 'DOS_INTENTOS'
+              ) AS dos_intentos,
+
+              /* inventario al CIERRE del día (según estado actual) */
               (SELECT COUNT(*)
                  FROM paquetes
                 WHERE received_at < ?
-                  AND (delivered_at IS NULL OR delivered_at >= ?)
-                  AND (returned_at  IS NULL OR returned_at  >= ?)
+                  AND estado IN %s
               ) AS total
-            """;
+            """, SQL_ESTADOS_EN_INVENTARIO, SQL_ESTADOS_EN_INVENTARIO, SQL_ESTADOS_EN_INVENTARIO);
 
         return jdbc.queryForMap(
             sql,
             fecha.toString(),
 
             // inventario inicio
-            dIni, dIni, dIni,
+            dIni,
 
-            // recibido, entregado
+            // recibido
             dIni, dFin,
+
+            // entregado
             dIni, dFin,
 
             // no_entregable + subtipos
@@ -455,7 +488,7 @@ public class ConsultasService {
             dIni, dFin,
 
             // total cierre
-            dFin, dFin, dFin
+            dFin
         );
     }
 }
