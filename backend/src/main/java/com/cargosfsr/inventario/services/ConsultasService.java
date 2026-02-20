@@ -420,13 +420,42 @@ public class ConsultasService {
 
               /* eventos del día */
               (SELECT COUNT(*) FROM paquetes WHERE received_at  >= ? AND received_at  < ?) AS recibido,
-              (SELECT COUNT(*) FROM paquetes WHERE delivered_at >= ? AND delivered_at < ?) AS entregado,
 
-              /* no entregable del día + breakdown por subtipo */
-              (SELECT COUNT(*) FROM paquetes WHERE returned_at >= ? AND returned_at < ?) AS no_entregable,
-              (SELECT COUNT(*) FROM paquetes WHERE returned_at >= ? AND returned_at < ? AND devolucion_subtipo = 'FUERA_DE_RUTA') AS fuera_de_ruta,
-              (SELECT COUNT(*) FROM paquetes WHERE returned_at >= ? AND returned_at < ? AND devolucion_subtipo = 'VENCIDOS')      AS vencidos,
-              (SELECT COUNT(*) FROM paquetes WHERE returned_at >= ? AND returned_at < ? AND devolucion_subtipo = 'DOS_INTENTOS')  AS dos_intentos,
+              /* ✅ FIX: evitar sobreconteo -> ENTREGADO debe respetar el estado actual */
+              (SELECT COUNT(*)
+                 FROM paquetes
+                WHERE estado = 'ENTREGADO'
+                  AND delivered_at >= ? AND delivered_at < ?
+              ) AS entregado,
+
+              /* ✅ FIX: evitar sobreconteo -> NO_ENTREGABLE debe respetar el estado actual */
+              (SELECT COUNT(*)
+                 FROM paquetes
+                WHERE estado = 'NO_ENTREGABLE'
+                  AND returned_at >= ? AND returned_at < ?
+              ) AS no_entregable,
+
+              /* ✅ FIX: breakdown por subtipo también con estado actual NO_ENTREGABLE */
+              (SELECT COUNT(*)
+                 FROM paquetes
+                WHERE estado = 'NO_ENTREGABLE'
+                  AND returned_at >= ? AND returned_at < ?
+                  AND devolucion_subtipo = 'FUERA_DE_RUTA'
+              ) AS fuera_de_ruta,
+
+              (SELECT COUNT(*)
+                 FROM paquetes
+                WHERE estado = 'NO_ENTREGABLE'
+                  AND returned_at >= ? AND returned_at < ?
+                  AND devolucion_subtipo = 'VENCIDOS'
+              ) AS vencidos,
+
+              (SELECT COUNT(*)
+                 FROM paquetes
+                WHERE estado = 'NO_ENTREGABLE'
+                  AND returned_at >= ? AND returned_at < ?
+                  AND devolucion_subtipo = 'DOS_INTENTOS'
+              ) AS dos_intentos,
 
               /* inventario al CIERRE del día */
               (SELECT COUNT(*)
@@ -444,11 +473,13 @@ public class ConsultasService {
             // inventario inicio
             dIni, dIni, dIni,
 
-            // recibido, entregado
-            dIni, dFin,
+            // recibido
             dIni, dFin,
 
-            // no_entregable + subtipos
+            // entregado (con estado actual)
+            dIni, dFin,
+
+            // no_entregable + subtipos (con estado actual)
             dIni, dFin,
             dIni, dFin,
             dIni, dFin,
