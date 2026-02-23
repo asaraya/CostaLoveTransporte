@@ -1,5 +1,5 @@
 // src/App.jsx
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { NavLink, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
 import Recepcion from './pages/Recepcion.jsx'
 import Inventario from './pages/Inventario.jsx'
@@ -114,6 +114,48 @@ export default function App() {
   const loc = useLocation()
   const isAuthPage = loc.pathname === '/login' || loc.pathname === '/register'
 
+  // ---- Avisos (campanita) ----
+  const [avisosSummary, setAvisosSummary] = useState({
+    intento1: 0,
+    intento2: 0,
+    noEntregable: 0,
+    total: 0,
+    hasAny: false,
+  })
+
+  const loadAvisosSummary = useCallback(async () => {
+    try {
+      const { data } = await api.get('/busqueda/avisos/summary', { timeout: 15000 })
+      const intento1 = Number(data?.intento1 ?? 0) || 0
+      const intento2 = Number(data?.intento2 ?? 0) || 0
+      const noEntregable = Number(data?.noEntregable ?? 0) || 0
+      const total = Number(data?.total ?? (intento1 + intento2 + noEntregable)) || 0
+      const hasAny = Boolean(data?.hasAny ?? (total > 0))
+
+      setAvisosSummary({ intento1, intento2, noEntregable, total, hasAny })
+    } catch {
+      setAvisosSummary({ intento1: 0, intento2: 0, noEntregable: 0, total: 0, hasAny: false })
+    }
+  }, [])
+
+  // Refresh al cambiar de ruta (y solo en páginas privadas)
+  useEffect(() => {
+    if (isAuthPage) return
+    loadAvisosSummary()
+  }, [isAuthPage, loc.pathname, loadAvisosSummary])
+
+  // Poll + listener para refresh explícito (cuando se aplican avisos)
+  useEffect(() => {
+    if (isAuthPage) return
+    const id = setInterval(loadAvisosSummary, 60000)
+    const onRefresh = () => loadAvisosSummary()
+    window.addEventListener('avisos:refresh', onRefresh)
+    return () => {
+      clearInterval(id)
+      window.removeEventListener('avisos:refresh', onRefresh)
+    }
+  }, [isAuthPage, loadAvisosSummary])
+
   // Trae "me" y lo ACTUALIZA también cuando cambia la ruta
   const [me, setMe] = useState(null)
   useEffect(() => {
@@ -166,6 +208,31 @@ export default function App() {
                 gap: 10
               }}
             >
+              {/* Campanita de avisos */}
+              <button
+                type="button"
+                className={`notifBell${avisosSummary.hasAny ? ' notifBell--active' : ''}`}
+                aria-label="Avisos"
+                title={
+                  avisosSummary.hasAny
+                    ? `Avisos pendientes: ${avisosSummary.total} (1er intento: ${avisosSummary.intento1}, 2do intento: ${avisosSummary.intento2}, no entregable: ${avisosSummary.noEntregable})`
+                    : 'No hay avisos pendientes'
+                }
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 1 0-14 0v5l-2 2v1h18v-1l-2-2Z"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                {avisosSummary.hasAny && (
+                  <span className="notifBell__badge">{avisosSummary.total}</span>
+                )}
+              </button>
+
               {/* Label usuario en sesión */}
               <div
                 title="Usuario en sesión"

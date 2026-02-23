@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, toastErr } from '../api'
+import { api, toastErr, toastOk } from '../api'
 import * as XLSX from 'xlsx'
 
 /* columnas a ocultar (compat) */
@@ -483,9 +483,12 @@ export default function Inventario() {
       const ok = Number(data?.ok ?? 0)
       const fail = Number(data?.fail ?? 0)
 
-      if (total === 0) toast('No hay paquetes para actualizar')
-      else if (fail > 0) toast(`Actualizados: ${ok}/${total}. Fallidos: ${fail}`)
-      else toast.success(`Actualizados: ${ok}/${total}`)
+      if (total === 0) toastOk('No hay paquetes para actualizar')
+      else if (fail > 0) toastOk(`Actualizados: ${ok}/${total}. Fallidos: ${fail}`)
+      else toastOk(`Actualizados: ${ok}/${total}`)
+
+      // Dispara refresh de la campanita en el navbar
+      try { window.dispatchEvent(new Event('avisos:refresh')) } catch {}
 
       setOffset(0)
       await Promise.all([
@@ -493,7 +496,7 @@ export default function Inventario() {
         buscar(0, { searchType: 'aviso', avisoTab })
       ])
     } catch (e) {
-      toast.error(e?.response?.data?.message || e?.message || 'Error cambiando estados')
+      toastErr(e)
     } finally {
       setAplicandoAviso(false)
     }

@@ -67,3 +67,45 @@ div[style*="#121212"],div[style*="#0d0d0d"],div[style*="#1f3b2a"]{
   color:#fff !important;
   border-color:var(--brand-green) !important;
 }
+
+/* === Campanita de avisos (navbar) === */
+.notifBell{
+  position:relative;
+  width:40px;
+  height:40px;
+  padding:0;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  background:transparent !important;
+  border:2px solid rgba(255,255,255,.75) !important;
+  color:#fff !important;
+  border-radius:10px;
+}
+.notifBell svg{width:20px;height:20px;display:block}
+.notifBell{opacity:.8}
+.notifBell:hover{opacity:1}
+
+.notifBell--active{
+  border-color:#FFB020 !important;
+  color:#FFB020 !important;
+  opacity:1;
+}
+
+.notifBell__badge{
+  position:absolute;
+  top:-6px;
+  right:-6px;
+  min-width:18px;
+  height:18px;
+  padding:0 5px;
+  border-radius:999px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:11px;
+  font-weight:800;
+  background:#FFB020;
+  color:#163E7A;
+  border:2px solid #163E7A;
+}
