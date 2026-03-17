@@ -154,13 +154,12 @@ public class DashboardController {
     String sql =
         """
         SELECT u.id AS mensajero_id,
-               u.full_name AS transportista,
-               COALESCE(COUNT(p.id), 0) AS cantidad
+              u.full_name AS transportista,
+              COALESCE(COUNT(p.id), 0) AS cantidad
         FROM usuarios u
         LEFT JOIN paquetes p
           ON p.mensajero_id = u.id
-         AND p.estado = 'PRUEBA_DE_ENTREGA'
-         AND (? IS NULL OR (p.delivered_at >= ? AND p.delivered_at < ?))
+        AND p.estado = 'PRUEBA_DE_ENTREGA'
         WHERE u.rol = 'MENSAJERO'
         GROUP BY u.id, u.full_name
         ORDER BY cantidad DESC, transportista ASC
@@ -176,9 +175,6 @@ public class DashboardController {
           m.put("cantidad", rs.getInt("cantidad"));
           return m;
         },
-        marker,
-        dIni,
-        dFinExcl,
         limit);
   }
 
@@ -202,20 +198,19 @@ public class DashboardController {
     String sql =
         """
         SELECT p.id,
-               p.tracking_code,
-               s.marchamo,
-               d.nombre AS distrito_nombre,
-               p.estado,
-               p.delivered_at,
-               p.recipient_name,
-               p.recipient_phone,
-               p.recipient_address
+              p.tracking_code,
+              s.marchamo,
+              d.nombre AS distrito_nombre,
+              p.estado,
+              p.delivered_at,
+              p.recipient_name,
+              p.recipient_phone,
+              p.recipient_address
         FROM paquetes p
         JOIN sacos s ON s.id = p.saco_id
         JOIN distritos d ON d.id = p.distrito_id
         WHERE p.estado = 'PRUEBA_DE_ENTREGA'
           AND p.mensajero_id = ?
-          AND (? IS NULL OR (p.delivered_at >= ? AND p.delivered_at < ?))
         ORDER BY p.delivered_at DESC, p.id DESC
         LIMIT ?
         """;
@@ -236,9 +231,6 @@ public class DashboardController {
           return m;
         },
         mensajeroId,
-        marker,
-        dIni,
-        dFinExcl,
         limit);
   }
 
