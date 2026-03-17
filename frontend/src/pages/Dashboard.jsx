@@ -35,51 +35,14 @@ function normalizeByEstado(arr) {
   }))
 }
 
+function countEstadoActual(byEstado, estadoBuscado) {
+  const rows = normalizeByEstado(byEstado)
+  return rows.find(r => r.estado === String(estadoBuscado).toUpperCase())?.cantidad ?? 0
+}
+
 function calcInventarioDesdeByEstado(byEstado) {
   const rows = normalizeByEstado(byEstado)
   return rows.reduce((acc, r) => acc + (ESTADOS_INVENTARIO.has(r.estado) ? r.cantidad : 0), 0)
-}
-
-function normalizeEstadoCode(v) {
-  return String(v ?? '').trim().toUpperCase()
-}
-
-function normalizeSubtipoCode(v) {
-  return String(v ?? '').trim().toUpperCase()
-}
-
-function resumirPorEstadoActual(rows) {
-  const arr = Array.isArray(rows) ? rows : []
-
-  const out = {
-    inventario: 0,
-    recibido: arr.length,
-    entregado: 0,
-    fuera_de_ruta: 0,
-    vencidos: 0,
-    dos_intentos: 0,
-    no_entregar: 0,
-    total: arr.length,
-  }
-
-  for (const r of arr) {
-    const estado = normalizeEstadoCode(r?.estado ?? r?.ESTADO)
-    const subtipo = normalizeSubtipoCode(
-      r?.devolucion_subtipo ?? r?.devolucionSubtipo ?? r?.DEVOLUCION_SUBTIPO
-    )
-
-    if (ESTADOS_INVENTARIO.has(estado)) out.inventario += 1
-    if (estado === 'PRUEBA_DE_ENTREGA') out.entregado += 1
-
-    if (estado === 'NO_ENTREGABLE') {
-      out.no_entregar += 1
-      if (subtipo === 'FUERA_DE_RUTA') out.fuera_de_ruta += 1
-      else if (subtipo === 'VENCIDOS') out.vencidos += 1
-      else if (subtipo === 'DOS_INTENTOS') out.dos_intentos += 1
-    }
-  }
-
-  return out
 }
 
 export default function Dashboard() {
@@ -261,30 +224,93 @@ export default function Dashboard() {
       for (let day = 1; day <= daysInMonth; day++) {
         const dStr = String(day).padStart(2, '0')
         const fechaDia = `${yStr}-${mStr}-${dStr}`
-        const desde = toCRISO(fechaDia, '00', '00', '00')
-        const hasta = toCRISO(fechaDia, '23', '59', '59')
 
         requests.push(
-          api.get('/busqueda/fecha', {
-            params: { tipoFecha: 'RECEPCION', desde, hasta }
-          })
-            .then(res => ({
-              fecha: fechaDia,
-              rows: Array.isArray(res.data) ? res.data : []
-            }))
-            .catch(() => ({
-              fecha: fechaDia,
-              rows: []
-            }))
+          api.get('/reportes/diario', { params: { fecha: fechaDia, flat: true } })
+            .then(res => ({ fecha: fechaDia, raw: res.data }))
+            .catch(() => ({ fecha: fechaDia, raw: null }))
         )
       }
 
       const results = await Promise.all(requests)
 
-      const rows = results.map(({ fecha, rows }) => ({
-        fecha,
-        ...resumirPorEstadoActual(rows),
-      }))
+      const normalize = (raw) => {
+        if (!raw) return {}
+
+        const unwrapRow = (value) => {
+          if (!value) return null
+          if (Array.isArray(value)) return value[0] ?? null
+          if (typeof value === 'object') {
+            const rsKey = Object.keys(value).find(k => /^#result-set-\d+$/i.test(k))
+            if (rsKey && Array.isArray(value[rsKey])) return value[rsKey][0] ?? null
+            if (Array.isArray(value.result)) return value.result[0] ?? null
+            if (Array.isArray(value.rows)) return value.rows[0] ?? null
+          }
+          return value
+        }
+
+        const data = unwrapRow(raw) || {}
+
+        const toNumber = (value) => {
+          if (value === null || value === undefined || value === '') return null
+          const n = Number(value)
+          return Number.isFinite(n) ? n : value
+        }
+
+        const getField = (...keys) => {
+          for (const k of keys) {
+            if (Object.prototype.hasOwnProperty.call(data, k) && data[k] != null) {
+              return toNumber(data[k])
+            }
+          }
+          return null
+        }
+
+        const fueraDeRuta = getField(
+          'fuera_de_ruta', 'FUERA_DE_RUTA', 'fuera_ruta', 'FUERA_RUTA',
+          'dev_fuera_de_ruta', 'DEV_FUERA_DE_RUTA',
+          'enrutes', 'ENRUTES', 'dev_enrute', 'DEV_ENRUTE', 'devoluciones_enrute'
+        )
+
+        const vencidos = getField(
+          'vencidos', 'VENCIDOS', 'dev_vencidos', 'DEV_VENCIDOS'
+        )
+
+        const dosIntentos = getField(
+          'dos_intentos', 'DOS_INTENTOS', 'dev_dos_intentos', 'DEV_DOS_INTENTOS',
+          'segundo_intento', 'SEGUNDO_INTENTO', '2_intentos', 'DOS_INTENTOS',
+          'otras_zonas', 'OTRAS_ZONAS', 'dev_otras_zonas', 'DEV_OTRAS_ZONAS'
+        )
+
+        const totalDevDirecto = getField(
+          'no_entregar', 'NO_ENTREGAR',
+          'no_entregable', 'NO_ENTREGABLE',
+          'dev_no_entregable', 'DEV_NO_ENTREGABLE',
+          'devolucion', 'DEVOLUCION',
+          'devoluciones', 'DEVOLUCIONES'
+        )
+
+        const anySubtype = (fueraDeRuta != null) || (vencidos != null) || (dosIntentos != null)
+        const totalDevFallback = anySubtype
+          ? (Number(fueraDeRuta ?? 0) + Number(vencidos ?? 0) + Number(dosIntentos ?? 0))
+          : null
+
+        return {
+          inventario: getField('inventario', 'INVENTARIO', 'inv_inicial', 'inventario_inicial'),
+          recibido: getField('recibido', 'RECIBIDO', 'recibidos', 'RECIBIDOS'),
+          entregado: getField('entregado', 'ENTREGADO', 'pod', 'POD', 'prueba_de_entrega', 'PRUEBA_DE_ENTREGA'),
+          fuera_de_ruta: fueraDeRuta,
+          vencidos,
+          dos_intentos: dosIntentos,
+          no_entregar: totalDevDirecto != null ? totalDevDirecto : totalDevFallback,
+          total: getField('total', 'TOTAL', 'inv_final', 'inventario_final')
+        }
+      }
+
+      const rows = results.map(({ fecha, raw }) => {
+        const norm = normalize(raw)
+        return { fecha, ...norm }
+      })
 
       setMatrizMes(rows)
     } catch (e) {
@@ -409,6 +435,9 @@ export default function Dashboard() {
 
   const currentPFDateKey = 'received_at'
   const inventarioRealHoy = summary ? calcInventarioDesdeByEstado(summary.byEstado) : 0
+  const recibidosActuales = summary ? countEstadoActual(summary.byEstado, 'ENTREGADO_A_TRANSPORTISTA_LOCAL') : 0
+  const entregadosActuales = summary ? countEstadoActual(summary.byEstado, 'PRUEBA_DE_ENTREGA') : 0
+  const noEntregablesActuales = summary ? countEstadoActual(summary.byEstado, 'NO_ENTREGABLE') : 0
   const fmtCell = (v) => (v === null || v === undefined || v === '' ? '-' : v)
 
   return (
@@ -435,9 +464,9 @@ export default function Dashboard() {
       {summary && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 12 }}>
           <Kpi title={`Recibidos ${summary.fecha ?? fecha}`} value={summary.hoy?.recibidos ?? 0} />
-          <Kpi title={`Entregados actuales de ${summary.fecha ?? fecha}`} value={summary.hoy?.entregados ?? 0} />
+          <Kpi title={`Entregados (POD) ${summary.fecha ?? fecha}`} value={summary.hoy?.entregados ?? 0} />
           <Kpi
-            title={`No entregables actuales de ${summary.fecha ?? fecha}`}
+            title={`No entregables (Devolución) ${summary.fecha ?? fecha}`}
             value={summary.hoy?.noEntregable ?? summary.hoy?.no_entregable ?? summary.hoy?.devoluciones ?? 0}
           />
         </div>
