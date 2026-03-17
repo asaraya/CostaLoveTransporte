@@ -39,32 +39,58 @@ public class DashboardController {
                 + "'ENTREGADO_A_TRANSPORTISTA_LOCAL','NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE','ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'"
                 + ")");
 
+    int recibidosHoy =
+        count("SELECT COUNT(*) FROM paquetes WHERE received_at >= ? AND received_at < ?", dIni, dFinExcl);
+
     int entregadosHoy =
         count(
             "SELECT COUNT(*) FROM paquetes "
-                + "WHERE estado = 'PRUEBA_DE_ENTREGA' "
-                + "AND delivered_at >= ? AND delivered_at < ?",
+                + "WHERE received_at >= ? AND received_at < ? "
+                + "AND estado = 'PRUEBA_DE_ENTREGA'",
             dIni,
             dFinExcl);
 
     int noEntregableHoy =
         count(
-            "SELECT COUNT(*) FROM paquetes WHERE estado='NO_ENTREGABLE' AND returned_at >= ? AND returned_at < ?",
+            "SELECT COUNT(*) FROM paquetes "
+                + "WHERE received_at >= ? AND received_at < ? "
+                + "AND estado = 'NO_ENTREGABLE'",
             dIni,
             dFinExcl);
 
-    int recibidosHoy =
-        count("SELECT COUNT(*) FROM paquetes WHERE received_at >= ? AND received_at < ?", dIni, dFinExcl);
-
-    int recibidosDisponibleHoy =
+    int recibidoTransportistaHoy =
         count(
-            """
-            SELECT COUNT(DISTINCT h.paquete_id)
-            FROM paquete_estado_historial h
-            WHERE h.estado_to = 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'
-              AND (h.estado_from IS NULL OR h.estado_from <> 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE')
-              AND h.changed_at >= ? AND h.changed_at < ?
-            """,
+            "SELECT COUNT(*) FROM paquetes "
+                + "WHERE received_at >= ? AND received_at < ? "
+                + "AND estado = 'ENTREGADO_A_TRANSPORTISTA_LOCAL'",
+            dIni,
+            dFinExcl);
+
+    int noEntregadoConsignatarioHoy =
+        count(
+            "SELECT COUNT(*) FROM paquetes "
+                + "WHERE received_at >= ? AND received_at < ? "
+                + "AND estado = 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'",
+            dIni,
+            dFinExcl);
+
+    int segundoIntentoHoy =
+        count(
+            "SELECT COUNT(*) FROM paquetes "
+                + "WHERE received_at >= ? AND received_at < ? "
+                + "AND estado = 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'",
+            dIni,
+            dFinExcl);
+
+    int inventarioActualHoy =
+        count(
+            "SELECT COUNT(*) FROM paquetes "
+                + "WHERE received_at >= ? AND received_at < ? "
+                + "AND estado IN ("
+                + "'ENTREGADO_A_TRANSPORTISTA_LOCAL',"
+                + "'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',"
+                + "'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'"
+                + ")",
             dIni,
             dFinExcl);
 
@@ -97,7 +123,10 @@ public class DashboardController {
 
     Map<String, Object> hoy = new LinkedHashMap<>();
     hoy.put("recibidos", recibidosHoy);
-    hoy.put("recibidos_disponible", recibidosDisponibleHoy);
+    hoy.put("inventario", inventarioActualHoy);
+    hoy.put("recibido_transportista", recibidoTransportistaHoy);
+    hoy.put("no_entregado", noEntregadoConsignatarioHoy);
+    hoy.put("segundo_intento", segundoIntentoHoy);
     hoy.put("entregados", entregadosHoy);
     hoy.put("no_entregable", noEntregableHoy);
     out.put("hoy", hoy);
@@ -158,7 +187,7 @@ public class DashboardController {
         LEFT JOIN paquetes p
           ON p.mensajero_id = u.id
          AND p.estado = 'PRUEBA_DE_ENTREGA'
-         AND (? IS NULL OR (p.delivered_at >= ? AND p.delivered_at < ?))
+         AND (? IS NULL OR (p.received_at >= ? AND p.received_at < ?))
         WHERE u.rol = 'MENSAJERO'
         GROUP BY u.id, u.full_name
         ORDER BY cantidad DESC, transportista ASC
@@ -205,6 +234,7 @@ public class DashboardController {
                d.nombre AS distrito_nombre,
                p.estado,
                p.delivered_at,
+               p.received_at,
                p.recipient_name,
                p.recipient_phone,
                p.recipient_address
@@ -213,7 +243,7 @@ public class DashboardController {
         JOIN distritos d ON d.id = p.distrito_id
         WHERE p.estado = 'PRUEBA_DE_ENTREGA'
           AND p.mensajero_id = ?
-          AND (? IS NULL OR (p.delivered_at >= ? AND p.delivered_at < ?))
+          AND (? IS NULL OR (p.received_at >= ? AND p.received_at < ?))
         ORDER BY p.delivered_at DESC, p.id DESC
         LIMIT ?
         """;
@@ -228,6 +258,7 @@ public class DashboardController {
           m.put("distrito_nombre", rs.getString("distrito_nombre"));
           m.put("estado", rs.getString("estado"));
           m.put("delivered_at", rs.getTimestamp("delivered_at"));
+          m.put("received_at", rs.getTimestamp("received_at"));
           m.put("recipient_name", rs.getString("recipient_name"));
           m.put("recipient_phone", rs.getString("recipient_phone"));
           m.put("recipient_address", rs.getString("recipient_address"));
