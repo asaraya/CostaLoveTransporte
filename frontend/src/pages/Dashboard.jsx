@@ -14,6 +14,9 @@ const ESTADO_LABEL = {
   NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE: 'No entregado - Consignatario no disponible (Inventario)',
   ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO: 'Entregado a transportista local - 2do intento (Inventario)',
   NO_ENTREGABLE: 'No entregable - Retornado a oficina local (Devolución)',
+  NO_ENTREGABLE__FUERA_DE_RUTA: '↳ Devolución: Fuera de ruta',
+  NO_ENTREGABLE__VENCIDOS: '↳ Devolución: Vencidos',
+  NO_ENTREGABLE__DOS_INTENTOS: '↳ Devolución: Dos intentos',
 }
 
 const labelEstado = (code) => {

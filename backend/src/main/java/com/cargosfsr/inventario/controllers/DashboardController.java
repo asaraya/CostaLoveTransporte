@@ -1,6 +1,7 @@
 package com.cargosfsr.inventario.controllers;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,13 +26,19 @@ public class DashboardController {
     return v == null ? 0 : v.intValue();
   }
 
+  private Map<String, Object> estadoRow(String estado, int cantidad) {
+    Map<String, Object> row = new LinkedHashMap<>();
+    row.put("estado", estado);
+    row.put("cantidad", cantidad);
+    return row;
+  }
+
   @GetMapping("/summary")
   public Map<String, Object> summary(@RequestParam(value = "fecha", required = false) String fecha) {
     LocalDate d = (fecha == null || fecha.isBlank()) ? LocalDate.now() : LocalDate.parse(fecha);
 
     int totalPaquetes = count("SELECT COUNT(*) FROM paquetes");
 
-    // Conteo REAL por estado actual
     int recibidosActual =
         count("SELECT COUNT(*) FROM paquetes WHERE estado = 'ENTREGADO_A_TRANSPORTISTA_LOCAL'");
 
@@ -50,31 +57,31 @@ public class DashboardController {
     int noEntregableActual =
         count("SELECT COUNT(*) FROM paquetes WHERE estado = 'NO_ENTREGABLE'");
 
+    int noEntregableFueraDeRuta =
+        count(
+            "SELECT COUNT(*) FROM paquetes WHERE estado = 'NO_ENTREGABLE' AND devolucion_subtipo = 'FUERA_DE_RUTA'");
+
+    int noEntregableVencidos =
+        count(
+            "SELECT COUNT(*) FROM paquetes WHERE estado = 'NO_ENTREGABLE' AND devolucion_subtipo = 'VENCIDOS'");
+
+    int noEntregableDosIntentos =
+        count(
+            "SELECT COUNT(*) FROM paquetes WHERE estado = 'NO_ENTREGABLE' AND devolucion_subtipo = 'DOS_INTENTOS'");
+
     int totalSacos = count("SELECT COUNT(*) FROM sacos");
     int sacosAbiertos = count("SELECT COUNT(*) FROM sacos WHERE closed_at IS NULL");
     int sacosCerrados = count("SELECT COUNT(*) FROM sacos WHERE closed_at IS NOT NULL");
 
-    List<Map<String, Object>> byEstado =
-        jdbc.query(
-            """
-            SELECT estado, COUNT(*) AS cantidad
-            FROM paquetes
-            GROUP BY estado
-            ORDER BY CASE estado
-              WHEN 'ENTREGADO_A_TRANSPORTISTA_LOCAL' THEN 1
-              WHEN 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' THEN 2
-              WHEN 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO' THEN 3
-              WHEN 'PRUEBA_DE_ENTREGA' THEN 4
-              WHEN 'NO_ENTREGABLE' THEN 5
-              ELSE 99
-            END, estado
-            """,
-            (rs, i) -> {
-              Map<String, Object> m = new LinkedHashMap<>();
-              m.put("estado", rs.getString("estado"));
-              m.put("cantidad", rs.getInt("cantidad"));
-              return m;
-            });
+    List<Map<String, Object>> byEstado = new ArrayList<>();
+    byEstado.add(estadoRow("ENTREGADO_A_TRANSPORTISTA_LOCAL", recibidosActual));
+    byEstado.add(estadoRow("NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE", noEntregadoDisponibleActual));
+    byEstado.add(estadoRow("ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO", segundoIntentoActual));
+    byEstado.add(estadoRow("PRUEBA_DE_ENTREGA", entregadosActual));
+    byEstado.add(estadoRow("NO_ENTREGABLE", noEntregableActual));
+    byEstado.add(estadoRow("NO_ENTREGABLE__FUERA_DE_RUTA", noEntregableFueraDeRuta));
+    byEstado.add(estadoRow("NO_ENTREGABLE__VENCIDOS", noEntregableVencidos));
+    byEstado.add(estadoRow("NO_ENTREGABLE__DOS_INTENTOS", noEntregableDosIntentos));
 
     Map<String, Object> out = new LinkedHashMap<>();
     out.put("fecha", d.toString());
@@ -89,9 +96,6 @@ public class DashboardController {
     sacos.put("cerrados", sacosCerrados);
     out.put("sacos", sacos);
 
-    // OJO:
-    // estas tarjetas ahora se basan en el ESTADO ACTUAL del paquete,
-    // no en received_at / delivered_at / returned_at
     Map<String, Object> hoy = new LinkedHashMap<>();
     hoy.put("recibidos", recibidosActual);
     hoy.put("recibidos_disponible", noEntregadoDisponibleActual);
