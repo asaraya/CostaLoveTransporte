@@ -28,45 +28,27 @@ public class DashboardController {
   @GetMapping("/summary")
   public Map<String, Object> summary(@RequestParam(value = "fecha", required = false) String fecha) {
     LocalDate d = (fecha == null || fecha.isBlank()) ? LocalDate.now() : LocalDate.parse(fecha);
-    String dIni = d + " 00:00:00";
-    String dFinExcl = d.plusDays(1) + " 00:00:00";
 
     int totalPaquetes = count("SELECT COUNT(*) FROM paquetes");
 
+    // Conteo REAL por estado actual
+    int recibidosActual =
+        count("SELECT COUNT(*) FROM paquetes WHERE estado = 'ENTREGADO_A_TRANSPORTISTA_LOCAL'");
+
+    int noEntregadoDisponibleActual =
+        count("SELECT COUNT(*) FROM paquetes WHERE estado = 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'");
+
+    int segundoIntentoActual =
+        count("SELECT COUNT(*) FROM paquetes WHERE estado = 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'");
+
     int inventarioActual =
-        count(
-            "SELECT COUNT(*) FROM paquetes WHERE estado IN ("
-                + "'ENTREGADO_A_TRANSPORTISTA_LOCAL','NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE','ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'"
-                + ")");
+        recibidosActual + noEntregadoDisponibleActual + segundoIntentoActual;
 
-    int entregadosHoy =
-        count(
-            "SELECT COUNT(*) FROM paquetes "
-                + "WHERE estado = 'PRUEBA_DE_ENTREGA' "
-                + "AND delivered_at >= ? AND delivered_at < ?",
-            dIni,
-            dFinExcl);
+    int entregadosActual =
+        count("SELECT COUNT(*) FROM paquetes WHERE estado = 'PRUEBA_DE_ENTREGA'");
 
-    int noEntregableHoy =
-        count(
-            "SELECT COUNT(*) FROM paquetes WHERE estado='NO_ENTREGABLE' AND returned_at >= ? AND returned_at < ?",
-            dIni,
-            dFinExcl);
-
-    int recibidosHoy =
-        count("SELECT COUNT(*) FROM paquetes WHERE received_at >= ? AND received_at < ?", dIni, dFinExcl);
-
-    int recibidosDisponibleHoy =
-        count(
-            """
-            SELECT COUNT(DISTINCT h.paquete_id)
-            FROM paquete_estado_historial h
-            WHERE h.estado_to = 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'
-              AND (h.estado_from IS NULL OR h.estado_from <> 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE')
-              AND h.changed_at >= ? AND h.changed_at < ?
-            """,
-            dIni,
-            dFinExcl);
+    int noEntregableActual =
+        count("SELECT COUNT(*) FROM paquetes WHERE estado = 'NO_ENTREGABLE'");
 
     int totalSacos = count("SELECT COUNT(*) FROM sacos");
     int sacosAbiertos = count("SELECT COUNT(*) FROM sacos WHERE closed_at IS NULL");
@@ -74,7 +56,19 @@ public class DashboardController {
 
     List<Map<String, Object>> byEstado =
         jdbc.query(
-            "SELECT estado, COUNT(*) AS cantidad FROM paquetes GROUP BY estado",
+            """
+            SELECT estado, COUNT(*) AS cantidad
+            FROM paquetes
+            GROUP BY estado
+            ORDER BY CASE estado
+              WHEN 'ENTREGADO_A_TRANSPORTISTA_LOCAL' THEN 1
+              WHEN 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' THEN 2
+              WHEN 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO' THEN 3
+              WHEN 'PRUEBA_DE_ENTREGA' THEN 4
+              WHEN 'NO_ENTREGABLE' THEN 5
+              ELSE 99
+            END, estado
+            """,
             (rs, i) -> {
               Map<String, Object> m = new LinkedHashMap<>();
               m.put("estado", rs.getString("estado"));
@@ -95,11 +89,15 @@ public class DashboardController {
     sacos.put("cerrados", sacosCerrados);
     out.put("sacos", sacos);
 
+    // OJO:
+    // estas tarjetas ahora se basan en el ESTADO ACTUAL del paquete,
+    // no en received_at / delivered_at / returned_at
     Map<String, Object> hoy = new LinkedHashMap<>();
-    hoy.put("recibidos", recibidosHoy);
-    hoy.put("recibidos_disponible", recibidosDisponibleHoy);
-    hoy.put("entregados", entregadosHoy);
-    hoy.put("no_entregable", noEntregableHoy);
+    hoy.put("recibidos", recibidosActual);
+    hoy.put("recibidos_disponible", noEntregadoDisponibleActual);
+    hoy.put("segundo_intento", segundoIntentoActual);
+    hoy.put("entregados", entregadosActual);
+    hoy.put("no_entregable", noEntregableActual);
     out.put("hoy", hoy);
 
     out.put("inventarioActual", inventarioActual);
