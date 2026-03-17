@@ -35,11 +35,6 @@ function normalizeByEstado(arr) {
   }))
 }
 
-function countEstadoActual(byEstado, estadoBuscado) {
-  const rows = normalizeByEstado(byEstado)
-  return rows.find(r => r.estado === String(estadoBuscado).toUpperCase())?.cantidad ?? 0
-}
-
 function calcInventarioDesdeByEstado(byEstado) {
   const rows = normalizeByEstado(byEstado)
   return rows.reduce((acc, r) => acc + (ESTADOS_INVENTARIO.has(r.estado) ? r.cantidad : 0), 0)
@@ -435,9 +430,6 @@ export default function Dashboard() {
 
   const currentPFDateKey = 'received_at'
   const inventarioRealHoy = summary ? calcInventarioDesdeByEstado(summary.byEstado) : 0
-  const recibidosActuales = summary ? countEstadoActual(summary.byEstado, 'ENTREGADO_A_TRANSPORTISTA_LOCAL') : 0
-  const entregadosActuales = summary ? countEstadoActual(summary.byEstado, 'PRUEBA_DE_ENTREGA') : 0
-  const noEntregablesActuales = summary ? countEstadoActual(summary.byEstado, 'NO_ENTREGABLE') : 0
   const fmtCell = (v) => (v === null || v === undefined || v === '' ? '-' : v)
 
   return (

@@ -397,8 +397,8 @@ public class ConsultasService {
 
     /**
      * Reporte diario FLAT (para dashboard).
-     * Devuelve:
-     * inventario, recibido, entregado, no_entregable, fuera_de_ruta, vencidos, dos_intentos, total
+     * Regla rápida para evitar sobreconteo:
+     * cada bloque cuenta SOLO paquetes cuyo estado actual corresponde al bloque.
      */
     public Map<String, Object> reporteDiarioFlat(LocalDate fecha) {
         if (fecha == null) return Map.of();
@@ -410,32 +410,39 @@ public class ConsultasService {
             SELECT
               ? AS fecha,
 
-              /* inventario al INICIO del día (paquetes vigentes) */
+              /* inventario al INICIO del día: solo estados que siguen en inventario */
               (SELECT COUNT(*)
                  FROM paquetes
-                WHERE received_at < ?
-                  AND (delivered_at IS NULL OR delivered_at >= ?)
-                  AND (returned_at  IS NULL OR returned_at  >= ?)
+                WHERE estado IN ('ENTREGADO_A_TRANSPORTISTA_LOCAL',
+                                 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
+                                 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')
+                  AND received_at < ?
               ) AS inventario,
 
-              /* eventos del día */
-              (SELECT COUNT(*) FROM paquetes WHERE received_at  >= ? AND received_at  < ?) AS recibido,
-
-              /* ✅ FIX: evitar sobreconteo -> ENTREGADO debe respetar el estado actual */
+              /* recibidos del día: solo paquetes cuyo estado actual sigue en inventario */
               (SELECT COUNT(*)
                  FROM paquetes
-                WHERE estado = 'ENTREGADO'
+                WHERE estado IN ('ENTREGADO_A_TRANSPORTISTA_LOCAL',
+                                 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
+                                 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')
+                  AND received_at >= ? AND received_at < ?
+              ) AS recibido,
+
+              /* entregados del día: solo paquetes cuyo estado actual es POD */
+              (SELECT COUNT(*)
+                 FROM paquetes
+                WHERE estado = 'PRUEBA_DE_ENTREGA'
                   AND delivered_at >= ? AND delivered_at < ?
               ) AS entregado,
 
-              /* ✅ FIX: evitar sobreconteo -> NO_ENTREGABLE debe respetar el estado actual */
+              /* devoluciones del día: solo paquetes cuyo estado actual es NO_ENTREGABLE */
               (SELECT COUNT(*)
                  FROM paquetes
                 WHERE estado = 'NO_ENTREGABLE'
                   AND returned_at >= ? AND returned_at < ?
               ) AS no_entregable,
 
-              /* ✅ FIX: breakdown por subtipo también con estado actual NO_ENTREGABLE */
+              /* breakdown de devolución respetando el estado actual */
               (SELECT COUNT(*)
                  FROM paquetes
                 WHERE estado = 'NO_ENTREGABLE'
@@ -457,12 +464,13 @@ public class ConsultasService {
                   AND devolucion_subtipo = 'DOS_INTENTOS'
               ) AS dos_intentos,
 
-              /* inventario al CIERRE del día */
+              /* inventario al CIERRE del día: solo estados actuales de inventario */
               (SELECT COUNT(*)
                  FROM paquetes
-                WHERE received_at < ?
-                  AND (delivered_at IS NULL OR delivered_at >= ?)
-                  AND (returned_at  IS NULL OR returned_at  >= ?)
+                WHERE estado IN ('ENTREGADO_A_TRANSPORTISTA_LOCAL',
+                                 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
+                                 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')
+                  AND received_at < ?
               ) AS total
             """;
 
@@ -471,22 +479,22 @@ public class ConsultasService {
             fecha.toString(),
 
             // inventario inicio
-            dIni, dIni, dIni,
+            dIni,
 
             // recibido
             dIni, dFin,
 
-            // entregado (con estado actual)
+            // entregado
             dIni, dFin,
 
-            // no_entregable + subtipos (con estado actual)
+            // no_entregable + subtipos
             dIni, dFin,
             dIni, dFin,
             dIni, dFin,
             dIni, dFin,
 
             // total cierre
-            dFin, dFin, dFin
+            dFin
         );
     }
 }
