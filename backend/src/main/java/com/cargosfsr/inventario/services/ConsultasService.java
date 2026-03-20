@@ -21,6 +21,12 @@ import org.springframework.stereotype.Service;
 @Service
 public class ConsultasService {
 
+    private static final String ESTADO_RECIBIDO = "ENTREGADO_A_TRANSPORTISTA_LOCAL";
+    private static final String ESTADO_NO_ENTREGADO = "NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE";
+    private static final String ESTADO_SEGUNDO_INTENTO = "ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO";
+    private static final String ESTADO_POD = "PRUEBA_DE_ENTREGA";
+    private static final String ESTADO_NO_ENTREGABLE = "NO_ENTREGABLE";
+
     private final JdbcTemplate jdbc;
 
     public ConsultasService(JdbcTemplate jdbc) {
@@ -36,12 +42,145 @@ public class ConsultasService {
             "('ENTREGADO_A_TRANSPORTISTA_LOCAL','NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE','ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')";
 
     private static final List<String> ESTADOS_EN_INVENTARIO = List.of(
-            "ENTREGADO_A_TRANSPORTISTA_LOCAL",
-            "NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE",
-            "ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO"
+            ESTADO_RECIBIDO,
+            ESTADO_NO_ENTREGADO,
+            ESTADO_SEGUNDO_INTENTO
     );
 
     private Timestamp ts(Instant i) { return i == null ? null : Timestamp.from(i); }
+
+    private long countLong(String sql, Object... args) {
+        Long v = jdbc.queryForObject(sql, Long.class, args);
+        return v == null ? 0L : v;
+    }
+
+    private long countReceivedBetween(Timestamp desde, Timestamp hasta) {
+        return countLong(
+                """
+                SELECT COUNT(*)
+                FROM paquetes p
+                WHERE p.received_at >= ?
+                  AND p.received_at < ?
+                """,
+                desde,
+                hasta);
+    }
+
+    private long countDistinctEffectiveStateBetween(String estado, Timestamp desde, Timestamp hasta) {
+        return countLong(
+                """
+                SELECT COUNT(DISTINCT x.paquete_id)
+                FROM (
+                  SELECT
+                    h.paquete_id,
+                    h.estado_to,
+                    CASE
+                      WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
+                      WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
+                      WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
+                      ELSE h.changed_at
+                    END AS effective_at
+                  FROM paquete_estado_historial h
+                  JOIN paquetes p ON p.id = h.paquete_id
+                ) x
+                WHERE x.estado_to = ?
+                  AND x.effective_at >= ?
+                  AND x.effective_at < ?
+                """,
+                estado,
+                desde,
+                hasta);
+    }
+
+    private long countDistinctEffectiveReturnSubtypeBetween(String subtipo, Timestamp desde, Timestamp hasta) {
+        return countLong(
+                """
+                SELECT COUNT(DISTINCT x.paquete_id)
+                FROM (
+                  SELECT
+                    h.paquete_id,
+                    h.estado_to,
+                    p.devolucion_subtipo,
+                    CASE
+                      WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
+                      WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
+                      WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
+                      ELSE h.changed_at
+                    END AS effective_at
+                  FROM paquete_estado_historial h
+                  JOIN paquetes p ON p.id = h.paquete_id
+                ) x
+                WHERE x.estado_to = 'NO_ENTREGABLE'
+                  AND x.devolucion_subtipo = ?
+                  AND x.effective_at >= ?
+                  AND x.effective_at < ?
+                """,
+                subtipo,
+                desde,
+                hasta);
+    }
+
+    private Map<String, Long> snapshotByEstado(Timestamp cutoffExclusivo) {
+        Map<String, Long> out = new LinkedHashMap<>();
+        out.put(ESTADO_RECIBIDO, 0L);
+        out.put(ESTADO_NO_ENTREGADO, 0L);
+        out.put(ESTADO_SEGUNDO_INTENTO, 0L);
+        out.put(ESTADO_POD, 0L);
+        out.put(ESTADO_NO_ENTREGABLE, 0L);
+        out.put("NO_ENTREGABLE__FUERA_DE_RUTA", 0L);
+        out.put("NO_ENTREGABLE__VENCIDOS", 0L);
+        out.put("NO_ENTREGABLE__DOS_INTENTOS", 0L);
+
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                """
+                WITH ranked AS (
+                  SELECT
+                    x.paquete_id,
+                    x.estado_to,
+                    x.devolucion_subtipo,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY x.paquete_id
+                      ORDER BY x.effective_at DESC, x.id DESC
+                    ) AS rn
+                  FROM (
+                    SELECT
+                      h.id,
+                      h.paquete_id,
+                      h.estado_to,
+                      p.devolucion_subtipo,
+                      CASE
+                        WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
+                        WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
+                        WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
+                        ELSE h.changed_at
+                      END AS effective_at
+                    FROM paquete_estado_historial h
+                    JOIN paquetes p ON p.id = h.paquete_id
+                  ) x
+                  WHERE x.effective_at < ?
+                )
+                SELECT estado_to AS estado, devolucion_subtipo, COUNT(*) AS cantidad
+                FROM ranked
+                WHERE rn = 1
+                GROUP BY estado_to, devolucion_subtipo
+                """,
+                cutoffExclusivo);
+
+        for (Map<String, Object> row : rows) {
+            String estado = String.valueOf(row.get("estado"));
+            long cantidad = row.get("cantidad") instanceof Number n ? n.longValue() : 0L;
+            String subtipo = row.get("devolucion_subtipo") == null ? null : String.valueOf(row.get("devolucion_subtipo"));
+
+            out.put(estado, out.getOrDefault(estado, 0L) + cantidad);
+
+            if (ESTADO_NO_ENTREGABLE.equals(estado) && subtipo != null && !subtipo.isBlank()) {
+                String key = "NO_ENTREGABLE__" + subtipo;
+                out.put(key, out.getOrDefault(key, 0L) + cantidad);
+            }
+        }
+
+        return out;
+    }
 
     /**
      * Soporta:
@@ -91,7 +230,7 @@ public class ConsultasService {
         int off = Math.max(0, offset);
 
         String est = (estado == null || estado.isBlank())
-                ? "NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE"
+                ? ESTADO_NO_ENTREGADO
                 : estado.trim().toUpperCase(Locale.ROOT);
 
         final String selectCols = """
@@ -151,7 +290,7 @@ public class ConsultasService {
     @Cacheable(cacheNames = "inventario", key = "'cnt_inventario:'+ #estado")
     public long countInventario(String estado) {
         String est = (estado == null || estado.isBlank())
-                ? "NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE"
+                ? ESTADO_NO_ENTREGADO
                 : estado.trim().toUpperCase(Locale.ROOT);
 
         if ("TODOS".equals(est)) {
@@ -397,8 +536,15 @@ public class ConsultasService {
 
     /**
      * Reporte diario FLAT (para dashboard).
-     * Regla rápida para evitar sobreconteo:
-     * cada bloque cuenta SOLO paquetes cuyo estado actual corresponde al bloque.
+     * Definición corregida:
+     * - inventario = snapshot al inicio del día
+     * - recibido = paquetes con received_at dentro del día
+     * - entregado = paquetes con evento POD dentro del día
+     * - no_entregable = paquetes con evento devolución dentro del día
+     * - total = snapshot al cierre del día
+     *
+     * Los snapshots usan el último estado efectivo por paquete antes del corte,
+     * para evitar sobreconteo por múltiples cambios del mismo paquete.
      */
     public Map<String, Object> reporteDiarioFlat(LocalDate fecha) {
         if (fecha == null) return Map.of();
@@ -406,95 +552,34 @@ public class ConsultasService {
         Timestamp dIni = Timestamp.valueOf(fecha.atStartOfDay());
         Timestamp dFin = Timestamp.valueOf(fecha.plusDays(1).atStartOfDay());
 
-        final String sql = """
-            SELECT
-              ? AS fecha,
+        Map<String, Long> snapshotInicio = snapshotByEstado(dIni);
+        Map<String, Long> snapshotCierre = snapshotByEstado(dFin);
 
-              /* inventario al INICIO del día: solo estados que siguen en inventario */
-              (SELECT COUNT(*)
-                 FROM paquetes
-                WHERE estado IN ('ENTREGADO_A_TRANSPORTISTA_LOCAL',
-                                 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
-                                 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')
-                  AND received_at < ?
-              ) AS inventario,
+        long inventarioInicio = snapshotInicio.getOrDefault(ESTADO_RECIBIDO, 0L)
+                + snapshotInicio.getOrDefault(ESTADO_NO_ENTREGADO, 0L)
+                + snapshotInicio.getOrDefault(ESTADO_SEGUNDO_INTENTO, 0L);
 
-              /* recibidos del día: solo paquetes cuyo estado actual sigue en inventario */
-              (SELECT COUNT(*)
-                 FROM paquetes
-                WHERE estado IN ('ENTREGADO_A_TRANSPORTISTA_LOCAL',
-                                 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
-                                 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')
-                  AND received_at >= ? AND received_at < ?
-              ) AS recibido,
+        long recibido = countReceivedBetween(dIni, dFin);
+        long entregado = countDistinctEffectiveStateBetween(ESTADO_POD, dIni, dFin);
+        long noEntregable = countDistinctEffectiveStateBetween(ESTADO_NO_ENTREGABLE, dIni, dFin);
+        long fueraDeRuta = countDistinctEffectiveReturnSubtypeBetween("FUERA_DE_RUTA", dIni, dFin);
+        long vencidos = countDistinctEffectiveReturnSubtypeBetween("VENCIDOS", dIni, dFin);
+        long dosIntentos = countDistinctEffectiveReturnSubtypeBetween("DOS_INTENTOS", dIni, dFin);
 
-              /* entregados del día: solo paquetes cuyo estado actual es POD */
-              (SELECT COUNT(*)
-                 FROM paquetes
-                WHERE estado = 'PRUEBA_DE_ENTREGA'
-                  AND delivered_at >= ? AND delivered_at < ?
-              ) AS entregado,
+        long inventarioCierre = snapshotCierre.getOrDefault(ESTADO_RECIBIDO, 0L)
+                + snapshotCierre.getOrDefault(ESTADO_NO_ENTREGADO, 0L)
+                + snapshotCierre.getOrDefault(ESTADO_SEGUNDO_INTENTO, 0L);
 
-              /* devoluciones del día: solo paquetes cuyo estado actual es NO_ENTREGABLE */
-              (SELECT COUNT(*)
-                 FROM paquetes
-                WHERE estado = 'NO_ENTREGABLE'
-                  AND returned_at >= ? AND returned_at < ?
-              ) AS no_entregable,
-
-              /* breakdown de devolución respetando el estado actual */
-              (SELECT COUNT(*)
-                 FROM paquetes
-                WHERE estado = 'NO_ENTREGABLE'
-                  AND returned_at >= ? AND returned_at < ?
-                  AND devolucion_subtipo = 'FUERA_DE_RUTA'
-              ) AS fuera_de_ruta,
-
-              (SELECT COUNT(*)
-                 FROM paquetes
-                WHERE estado = 'NO_ENTREGABLE'
-                  AND returned_at >= ? AND returned_at < ?
-                  AND devolucion_subtipo = 'VENCIDOS'
-              ) AS vencidos,
-
-              (SELECT COUNT(*)
-                 FROM paquetes
-                WHERE estado = 'NO_ENTREGABLE'
-                  AND returned_at >= ? AND returned_at < ?
-                  AND devolucion_subtipo = 'DOS_INTENTOS'
-              ) AS dos_intentos,
-
-              /* inventario al CIERRE del día: solo estados actuales de inventario */
-              (SELECT COUNT(*)
-                 FROM paquetes
-                WHERE estado IN ('ENTREGADO_A_TRANSPORTISTA_LOCAL',
-                                 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
-                                 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')
-                  AND received_at < ?
-              ) AS total
-            """;
-
-        return jdbc.queryForMap(
-            sql,
-            fecha.toString(),
-
-            // inventario inicio
-            dIni,
-
-            // recibido
-            dIni, dFin,
-
-            // entregado
-            dIni, dFin,
-
-            // no_entregable + subtipos
-            dIni, dFin,
-            dIni, dFin,
-            dIni, dFin,
-            dIni, dFin,
-
-            // total cierre
-            dFin
-        );
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("fecha", fecha.toString());
+        out.put("inventario", inventarioInicio);
+        out.put("recibido", recibido);
+        out.put("entregado", entregado);
+        out.put("no_entregable", noEntregable);
+        out.put("fuera_de_ruta", fueraDeRuta);
+        out.put("vencidos", vencidos);
+        out.put("dos_intentos", dosIntentos);
+        out.put("total", inventarioCierre);
+        return out;
     }
 }
