@@ -119,7 +119,7 @@ export default function Dashboard() {
     try {
       const [s, t, m] = await Promise.all([
         api.get('/dashboard/summary', { params: { fecha } }),
-        api.get('/dashboard/top-transportistas', { params: { limit: 100000, fecha } }),
+        api.get('/dashboard/top-transportistas', { params: { limit: 100000 } }),
         api.get('/dashboard/ultimos-movimientos', { params: { fecha, limit: 100000 } }),
       ])
 
@@ -155,7 +155,7 @@ export default function Dashboard() {
       const [s, u, t, m] = await Promise.all([
         api.get('/dashboard/summary', { params: { fecha } }),
         api.get('/dashboard/top-distritos', { params: { limit: 100000 } }),
-        api.get('/dashboard/top-transportistas', { params: { limit: 100000, fecha } }),
+        api.get('/dashboard/top-transportistas', { params: { limit: 100000 } }),
         api.get('/dashboard/ultimos-movimientos', { params: { fecha, limit: 100000 } }),
       ])
 
@@ -355,7 +355,7 @@ export default function Dashboard() {
     setTransModal({ open: true, mensajeroId, transportista, rows: [], loading: true, error: null })
     try {
       const { data } = await api.get('/dashboard/pods-transportista', {
-        params: { mensajeroId, fecha, limit: 100000 }
+        params: { mensajeroId, limit: 100000 }
       })
       const arr = Array.isArray(data) ? data : []
       const rows = arr.sort((a, b) => new Date(b?.delivered_at ?? 0).getTime() - new Date(a?.delivered_at ?? 0).getTime())
