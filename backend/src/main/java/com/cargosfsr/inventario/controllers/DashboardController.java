@@ -188,8 +188,8 @@ public class DashboardController {
     Timestamp dIni = startOfDay(d);
     Timestamp dFinExcl = startOfNextDay(d);
 
-    int totalPaquetesFecha = countReceivedBetween(dIni, dFinExcl);
-    int recibidosFecha = totalPaquetesFecha;
+    int totalPaquetesSistema = count("SELECT COUNT(*) FROM paquetes");
+    int recibidosFecha = countReceivedBetween(dIni, dFinExcl);
     int entregadosFecha = countDistinctEffectiveStateBetween(ESTADO_POD, dIni, dFinExcl);
     int noEntregableFecha = countDistinctEffectiveStateBetween(ESTADO_NO_ENTREGABLE, dIni, dFinExcl);
     int noEntregableFueraDeRuta =
@@ -229,7 +229,7 @@ public class DashboardController {
     out.put("fecha", d.toString());
 
     Map<String, Object> totales = new LinkedHashMap<>();
-    totales.put("paquetes", totalPaquetesFecha);
+    totales.put("paquetes", totalPaquetesSistema);
     totales.put("sacos", totalSacos);
     out.put("totales", totales);
 
