@@ -198,6 +198,12 @@ public class EstadoService {
                 p.setMensajero(null);
                 touchedMensajero = true;
             }
+
+            // cambio agregado: no puede quedar delivered_at si ahora pasa a NO_ENTREGABLE
+            if (p.getDeliveredAt() != null) {
+                p.setDeliveredAt(null);
+            }
+
             p.setReturnedAt(ts);
             touchedReturned = true;
             p.setDevolucionSubtipo(sub != null ? sub : DevolucionSubtipo.FUERA_DE_RUTA);
@@ -219,6 +225,14 @@ public class EstadoService {
             if (p.getMensajero() != null) {
                 p.setMensajero(null);
                 touchedMensajero = true;
+            }
+
+            // cambio agregado: cualquier otro estado tampoco debe conservar marcas finales inválidas
+            if (p.getDeliveredAt() != null) {
+                p.setDeliveredAt(null);
+            }
+            if (p.getReturnedAt() != null) {
+                p.setReturnedAt(null);
             }
         }
 
