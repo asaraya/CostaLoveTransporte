@@ -14,6 +14,7 @@ const ESTADO_LABEL = {
   NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE: 'No entregado - Consignatario no disponible (Inventario)',
   ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO: 'Entregado a transportista local - 2do intento (Inventario)',
   NO_ENTREGABLE: 'No entregable - Retornado a oficina local (Devolución)',
+  TR_A_CA: 'TR a CA',
   NO_ENTREGABLE__FUERA_DE_RUTA: '↳ Devolución: Fuera de ruta',
   NO_ENTREGABLE__VENCIDOS: '↳ Devolución: Vencidos',
   NO_ENTREGABLE__DOS_INTENTOS: '↳ Devolución: Dos intentos',
@@ -41,6 +42,12 @@ function normalizeByEstado(arr) {
 function calcInventarioDesdeByEstado(byEstado) {
   const rows = normalizeByEstado(byEstado)
   return rows.reduce((acc, r) => acc + (ESTADOS_INVENTARIO.has(r.estado) ? r.cantidad : 0), 0)
+}
+
+function countEstadoDesdeByEstado(byEstado, estadoBuscado) {
+  const objetivo = String(estadoBuscado ?? '').toUpperCase()
+  const rows = normalizeByEstado(byEstado)
+  return rows.reduce((acc, r) => acc + (r.estado === objetivo ? r.cantidad : 0), 0)
 }
 
 export default function Dashboard() {
@@ -434,6 +441,7 @@ export default function Dashboard() {
 
   const currentPFDateKey = 'received_at'
   const inventarioRealHoy = summary ? calcInventarioDesdeByEstado(summary.byEstado) : 0
+  const trACaActual = summary ? countEstadoDesdeByEstado(summary.byEstado, 'TR_A_CA') : 0
   const fmtCell = (v) => (v === null || v === undefined || v === '' ? '-' : v)
 
   return (
@@ -451,9 +459,10 @@ export default function Dashboard() {
       </div>
 
       {summary && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 12 }}>
           <Kpi title="Paquetes totales" value={summary.totales?.paquetes ?? summary.totalPaquetes ?? 0} />
           <Kpi title="En inventario" value={inventarioRealHoy ?? 0} />
+          <Kpi title="TR a CA" value={trACaActual ?? 0} />
         </div>
       )}
 

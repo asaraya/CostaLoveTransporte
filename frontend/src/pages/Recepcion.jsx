@@ -48,6 +48,7 @@ export default function Recepcion() {
 
   const [loadingSaco, setLoadingSaco] = useState(false)
   const [loadingPre, setLoadingPre] = useState(false)
+  const [loadingTrACa, setLoadingTrACa] = useState(false)
   const [log, setLog] = useState([])
   const appendLog = (line) => setLog(prev => [...prev, line])
 
@@ -182,6 +183,51 @@ export default function Recepcion() {
     }
   }
 
+  const onCambiarTrACa = async () => {
+    try {
+      if (!trackings.length) {
+        toastErr({ message: 'Ingresá al menos un tracking válido (HZCR/CR + dígitos)' })
+        return
+      }
+
+      if (!confirm(`¿Cambiar ${trackings.length} paquete(s) a TR a CA?`)) return
+
+      setLoadingTrACa(true)
+      setLog([])
+
+      const when = ymdToCRNoonISO(fecha)
+
+      const { data } = await api.post('/estado/bulk', {
+        trackings,
+        estado: 'TR_A_CA',
+        motivo: 'Cambio a TR a CA desde Recepción',
+        force: true,
+        when,
+      })
+
+      const ok = Number(data?.ok ?? data?.actualizados ?? data?.updated ?? 0)
+      const fail = Number(data?.fail ?? data?.fallidos ?? 0)
+      const total = Number(data?.total ?? trackings.length)
+
+      appendLog(`✅ Solicitud enviada: ${total} paquete(s) a TR a CA`)
+      if (Array.isArray(data?.resultados)) {
+        data.resultados.forEach(r => {
+          appendLog(`${r?.changed === false ? 'ℹ️' : '✅'} ${r?.tracking ?? ''} → ${r?.estado_nuevo ?? 'TR_A_CA'}`)
+        })
+      }
+      if (Array.isArray(data?.errores)) {
+        data.errores.forEach(r => appendLog(`❌ ${r?.tracking ?? ''}: ${r?.message ?? r?.error ?? 'Error'}`))
+      }
+
+      if (fail > 0) toastOk(`Cambio TR a CA: ${ok}/${total} ok, ${fail} error(es)`)
+      else toastOk(`Cambio TR a CA aplicado a ${ok || total} paquete(s)`)
+    } catch (e) {
+      toastErr(e)
+    } finally {
+      setLoadingTrACa(false)
+    }
+  }
+
   return (
     <div className="page">
       <h2 style={{ marginBottom: 12 }}>Recepción</h2>
@@ -248,7 +294,10 @@ export default function Recepcion() {
               <button onClick={onPreregistrar} disabled={loadingPre || trackings.length === 0}>
                 {loadingPre ? 'Preregistrando…' : 'Preregistrar paquetes'}
               </button>
-              <button onClick={() => { setRawTrackings(''); setLog([]) }} disabled={loadingPre}>
+              <button onClick={onCambiarTrACa} disabled={loadingTrACa || loadingPre || trackings.length === 0}>
+                {loadingTrACa ? 'Cambiando…' : 'Cambiar a TR a CA'}
+              </button>
+              <button onClick={() => { setRawTrackings(''); setLog([]) }} disabled={loadingPre || loadingTrACa}>
                 Limpiar
               </button>
             </div>
