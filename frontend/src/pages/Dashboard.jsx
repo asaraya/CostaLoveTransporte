@@ -301,6 +301,7 @@ export default function Dashboard() {
           vencidos,
           dos_intentos: dosIntentos,
           no_entregar: totalDevDirecto != null ? totalDevDirecto : totalDevFallback,
+          tr_a_ca: getField('tr_a_ca', 'TR_A_CA', 'trACa', 'TRACA'),
           total: getField('total', 'TOTAL', 'inv_final', 'inventario_final')
         }
       }
@@ -636,13 +637,14 @@ export default function Dashboard() {
                   <th style={th}>Vencidos</th>
                   <th style={th}>2 intentos</th>
                   <th style={th}>No entregable (Devolución)</th>
+                  <th style={th}>TR a CA</th>
                   <th style={th}>Total</th>
                 </tr>
               </thead>
               <tbody>
                 {matrizMes.length === 0 ? (
                   <tr>
-                    <td colSpan={9} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>
+                    <td colSpan={10} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>
                       Sin datos para el mes seleccionado
                     </td>
                   </tr>
@@ -656,6 +658,7 @@ export default function Dashboard() {
                     <td style={td}>{fmtCell(r.vencidos)}</td>
                     <td style={td}>{fmtCell(r.dos_intentos)}</td>
                     <td style={td}>{fmtCell(r.no_entregar)}</td>
+                    <td style={td}>{fmtCell(r.tr_a_ca)}</td>
                     <td style={td}>{fmtCell(r.total)}</td>
                   </tr>
                 ))}

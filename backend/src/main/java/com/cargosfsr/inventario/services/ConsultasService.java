@@ -26,6 +26,7 @@ public class ConsultasService {
     private static final String ESTADO_SEGUNDO_INTENTO = "ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO";
     private static final String ESTADO_POD = "PRUEBA_DE_ENTREGA";
     private static final String ESTADO_NO_ENTREGABLE = "NO_ENTREGABLE";
+    private static final String ESTADO_TR_A_CA = "TR_A_CA";
 
     private final JdbcTemplate jdbc;
 
@@ -127,6 +128,7 @@ public class ConsultasService {
         out.put(ESTADO_SEGUNDO_INTENTO, 0L);
         out.put(ESTADO_POD, 0L);
         out.put(ESTADO_NO_ENTREGABLE, 0L);
+        out.put(ESTADO_TR_A_CA, 0L);
         out.put("NO_ENTREGABLE__FUERA_DE_RUTA", 0L);
         out.put("NO_ENTREGABLE__VENCIDOS", 0L);
         out.put("NO_ENTREGABLE__DOS_INTENTOS", 0L);
@@ -562,6 +564,7 @@ public class ConsultasService {
         long recibido = countReceivedBetween(dIni, dFin);
         long entregado = countDistinctEffectiveStateBetween(ESTADO_POD, dIni, dFin);
         long noEntregable = countDistinctEffectiveStateBetween(ESTADO_NO_ENTREGABLE, dIni, dFin);
+        long trACa = countDistinctEffectiveStateBetween(ESTADO_TR_A_CA, dIni, dFin);
         long fueraDeRuta = countDistinctEffectiveReturnSubtypeBetween("FUERA_DE_RUTA", dIni, dFin);
         long vencidos = countDistinctEffectiveReturnSubtypeBetween("VENCIDOS", dIni, dFin);
         long dosIntentos = countDistinctEffectiveReturnSubtypeBetween("DOS_INTENTOS", dIni, dFin);
@@ -579,6 +582,7 @@ public class ConsultasService {
         out.put("fuera_de_ruta", fueraDeRuta);
         out.put("vencidos", vencidos);
         out.put("dos_intentos", dosIntentos);
+        out.put("tr_a_ca", trACa);
         out.put("total", inventarioCierre);
         return out;
     }

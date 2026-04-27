@@ -23,6 +23,7 @@ const SHEET_TITLES = {
   NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE: 'No entregado',
   ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO: 'Entregado TL 2do',
   NO_ENTREGABLE: 'No entregable',
+  TR_A_CA: 'TR a CA',
   EN_INVENTARIO: 'En inventario',
 }
 
@@ -83,6 +84,8 @@ function labelEstado(e) {
       return 'Entregado a transportista local - 2do intento'
     case 'NO_ENTREGABLE':
       return 'No entregable - Retornado a oficina local'
+    case 'TR_A_CA':
+      return 'TR a CA'
     default:
       return e || '-'
   }
@@ -152,12 +155,13 @@ export default function Reportes() {
 
   const [loading, setLoading] = useState(false)
 
-  // 5 estados (incluye PRUEBA_DE_ENTREGA)
+  // 6 estados (incluye PRUEBA_DE_ENTREGA y TR_A_CA)
   const [stPruebaEntrega, setStPruebaEntrega] = useState([])
   const [stEntregadoTL, setStEntregadoTL] = useState([])
   const [stNoEntregado, setStNoEntregado] = useState([])
   const [stEntregado2do, setStEntregado2do] = useState([])
   const [stNoEntregable, setStNoEntregable] = useState([])
+  const [stTrACa, setStTrACa] = useState([])
 
   // implícito: unión de 3 estados que SI están en inventario
   const [stInventario, setStInventario] = useState([])
@@ -191,12 +195,13 @@ export default function Reportes() {
         }
       }
 
-      const [rPDE, rETL, rNE, rE2, rNEN] = await Promise.all([
+      const [rPDE, rETL, rNE, rE2, rNEN, rTRCA] = await Promise.all([
         api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'PRUEBA_DE_ENTREGA' } }),
         api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'ENTREGADO_A_TRANSPORTISTA_LOCAL' } }),
         api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' } }),
         api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO' } }),
         api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'NO_ENTREGABLE' } }),
+        api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'TR_A_CA' } }),
       ])
 
       const aPDE = Array.isArray(rPDE.data) ? rPDE.data : []
@@ -204,12 +209,14 @@ export default function Reportes() {
       const aNE  = Array.isArray(rNE.data) ? rNE.data : []
       const aE2  = Array.isArray(rE2.data) ? rE2.data : []
       const aNEN = Array.isArray(rNEN.data) ? rNEN.data : []
+      const aTRCA = Array.isArray(rTRCA.data) ? rTRCA.data : []
 
       setStPruebaEntrega(aPDE)
       setStEntregadoTL(aETL)
       setStNoEntregado(aNE)
       setStEntregado2do(aE2)
       setStNoEntregable(aNEN)
+      setStTrACa(aTRCA)
 
       // “En inventario” = unión deduplicada por tracking (NO incluye PRUEBA_DE_ENTREGA)
       setStInventario(uniqByTracking([...aETL, ...aNE, ...aE2]))
@@ -224,7 +231,7 @@ export default function Reportes() {
     setMode('dia'); setFecha(hoy); setDesde(hoy); setHasta(hoy)
     setFiltrarFechas(false)
     setStPruebaEntrega([])
-    setStEntregadoTL([]); setStNoEntregado([]); setStEntregado2do([]); setStNoEntregable([]); setStInventario([])
+    setStEntregadoTL([]); setStNoEntregado([]); setStEntregado2do([]); setStNoEntregable([]); setStTrACa([]); setStInventario([])
   }
 
   // Proyección fija para tablas/export
@@ -276,6 +283,7 @@ export default function Reportes() {
       addSheetFixed(wb, SHEET_TITLES.NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE, stNoEntregado, dateKey)
       addSheetFixed(wb, SHEET_TITLES.ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO, stEntregado2do, dateKey)
       addSheetFixed(wb, SHEET_TITLES.NO_ENTREGABLE, stNoEntregable, dateKey)
+      addSheetFixed(wb, SHEET_TITLES.TR_A_CA, stTrACa, dateKey)
       addSheetFixed(wb, SHEET_TITLES.EN_INVENTARIO, stInventario, dateKey)
       XLSX.writeFile(wb, `reporte_estados_${stamp}.xlsx`, { compression: true })
       return
@@ -288,6 +296,7 @@ export default function Reportes() {
       ...projectRows(stNoEntregado, dateKey),
       ...projectRows(stEntregado2do, dateKey),
       ...projectRows(stNoEntregable, dateKey),
+      ...projectRows(stTrACa, dateKey),
       ...projectRows(stInventario, dateKey),
     ]
 
@@ -311,6 +320,7 @@ export default function Reportes() {
     { title: 'No entregado', value: stNoEntregado.length },
     { title: 'Entregado TL 2do', value: stEntregado2do.length },
     { title: 'No entregable', value: stNoEntregable.length },
+    { title: 'TR a CA', value: stTrACa.length },
     { title: 'En inventario', value: stInventario.length },
   ]
 
@@ -366,7 +376,7 @@ export default function Reportes() {
         )
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, margin: '12px 0' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 12, margin: '12px 0' }}>
         {kpi.map((k, i) => <Kpi key={i} title={k.title} value={k.value} />)}
       </div>
 
@@ -397,6 +407,11 @@ export default function Reportes() {
       </section>
 
       <section style={{ marginTop: 16 }}>
+        <h4>TR a CA {filtrarFechas ? (mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)) : '(Actual)'}</h4>
+        <DataTable rows={stTrACa} dateKey="last_state_change_at" />
+      </section>
+
+      <section style={{ marginTop: 16 }}>
         <h4>En inventario {filtrarFechas ? (mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)) : '(Actual)'}</h4>
         <DataTable rows={stInventario} dateKey="last_state_change_at" />
       </section>
@@ -410,6 +425,7 @@ export default function Reportes() {
       stNoEntregado.length +
       stEntregado2do.length +
       stNoEntregable.length +
+      stTrACa.length +
       stInventario.length
     )
   }

@@ -21,6 +21,7 @@ public class DashboardController {
   private static final String ESTADO_SEGUNDO_INTENTO = "ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO";
   private static final String ESTADO_POD = "PRUEBA_DE_ENTREGA";
   private static final String ESTADO_NO_ENTREGABLE = "NO_ENTREGABLE";
+  private static final String ESTADO_TR_A_CA = "TR_A_CA";
 
   private final JdbcTemplate jdbc;
 
@@ -115,6 +116,7 @@ public class DashboardController {
     out.put(ESTADO_SEGUNDO_INTENTO, 0);
     out.put(ESTADO_POD, 0);
     out.put(ESTADO_NO_ENTREGABLE, 0);
+    out.put(ESTADO_TR_A_CA, 0);
     out.put("NO_ENTREGABLE__FUERA_DE_RUTA", 0);
     out.put("NO_ENTREGABLE__VENCIDOS", 0);
     out.put("NO_ENTREGABLE__DOS_INTENTOS", 0);
@@ -192,6 +194,7 @@ public class DashboardController {
     int recibidosFecha = countReceivedBetween(dIni, dFinExcl);
     int entregadosFecha = countDistinctEffectiveStateBetween(ESTADO_POD, dIni, dFinExcl);
     int noEntregableFecha = countDistinctEffectiveStateBetween(ESTADO_NO_ENTREGABLE, dIni, dFinExcl);
+    int trACaFecha = countDistinctEffectiveStateBetween(ESTADO_TR_A_CA, dIni, dFinExcl);
     int noEntregableFueraDeRuta =
         countDistinctEffectiveReturnSubtypeBetween("FUERA_DE_RUTA", dIni, dFinExcl);
     int noEntregableVencidos = countDistinctEffectiveReturnSubtypeBetween("VENCIDOS", dIni, dFinExcl);
@@ -204,6 +207,7 @@ public class DashboardController {
     int segundoIntentoActual = snapshot.getOrDefault(ESTADO_SEGUNDO_INTENTO, 0);
     int entregadosActual = snapshot.getOrDefault(ESTADO_POD, 0);
     int noEntregableActual = snapshot.getOrDefault(ESTADO_NO_ENTREGABLE, 0);
+    int trACaActual = snapshot.getOrDefault(ESTADO_TR_A_CA, 0);
     int inventarioActual = recibidosActual + noEntregadoDisponibleActual + segundoIntentoActual;
 
     int totalSacos = count("SELECT COUNT(*) FROM sacos");
@@ -216,6 +220,7 @@ public class DashboardController {
     byEstado.add(estadoRow(ESTADO_SEGUNDO_INTENTO, segundoIntentoActual));
     byEstado.add(estadoRow(ESTADO_POD, entregadosActual));
     byEstado.add(estadoRow(ESTADO_NO_ENTREGABLE, noEntregableActual));
+    byEstado.add(estadoRow(ESTADO_TR_A_CA, trACaActual));
     byEstado.add(
         estadoRow(
             "NO_ENTREGABLE__FUERA_DE_RUTA", snapshot.getOrDefault("NO_ENTREGABLE__FUERA_DE_RUTA", 0)));
@@ -249,6 +254,7 @@ public class DashboardController {
     hoy.put("fuera_de_ruta", noEntregableFueraDeRuta);
     hoy.put("vencidos", noEntregableVencidos);
     hoy.put("dos_intentos", noEntregableDosIntentos);
+    hoy.put("tr_a_ca", trACaFecha);
     out.put("hoy", hoy);
 
     out.put("inventarioActual", inventarioActual);

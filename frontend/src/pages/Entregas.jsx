@@ -51,6 +51,7 @@ export default function Entregas() {
     { val: 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE', label: 'No entregado - Consignatario no disponible' }, // 1er intento
     { val: 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO', label: 'Entregado a transportista local - 2do intento' }, // 2do intento
     { val: 'NO_ENTREGABLE', label: 'No entregable - Retornado a oficina local' }, // devolución
+    { val: 'TR_A_CA', label: 'TR a CA' }, // fuera de inventario
   ]
   const [nuevoEstado, setNuevoEstado] = useState(ESTADOS[0].val)
 

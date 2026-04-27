@@ -71,6 +71,7 @@ const ESTADOS_UI = [
   { key: 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE', label: 'No entregado - Consignatario no disponible' },
   { key: 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO', label: 'Entregado a transportista local - 2do intento' },
   { key: 'NO_ENTREGABLE', label: 'No entregable - Retornado a oficina local' },
+  { key: 'TR_A_CA', label: 'TR a CA' },
   { key: 'TODOS', label: 'Todos' },
 ]
 
