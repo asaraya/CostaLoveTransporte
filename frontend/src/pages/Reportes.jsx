@@ -91,6 +91,51 @@ function labelEstado(e) {
   }
 }
 
+// Tipo de fecha que entiende el SP sp_paquetes_por_estado.
+// IMPORTANTE:
+// - No usar CAMBIO para POD/devolución, porque CAMBIO filtra por last_state_change_at.
+// - POD debe filtrar por delivered_at.
+// - NO_ENTREGABLE debe filtrar por returned_at.
+// - Inventario/recepción debe filtrar por received_at.
+// - TR_A_CA no tiene columna propia; queda por CAMBIO hasta que exista tr_a_ca_at.
+function tipoFechaPorEstado(estado) {
+  const k = String(estado || '').toUpperCase()
+  switch (k) {
+    case 'PRUEBA_DE_ENTREGA':
+      return 'ENTREGA'
+    case 'NO_ENTREGABLE':
+      return 'DEVOLUCION'
+    case 'ENTREGADO_A_TRANSPORTISTA_LOCAL':
+    case 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE':
+    case 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO':
+      return 'RECEPCION'
+    case 'TR_A_CA':
+      return 'CAMBIO'
+    default:
+      return 'CAMBIO'
+  }
+}
+
+// Campo que se muestra/exporta como FECHA para cada estado.
+function dateKeyPorEstado(estado) {
+  const k = String(estado || '').toUpperCase()
+  switch (k) {
+    case 'PRUEBA_DE_ENTREGA':
+      return 'delivered_at'
+    case 'NO_ENTREGABLE':
+      return 'returned_at'
+    case 'ENTREGADO_A_TRANSPORTISTA_LOCAL':
+    case 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE':
+    case 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO':
+    case 'EN_INVENTARIO':
+      return 'received_at'
+    case 'TR_A_CA':
+      return 'last_state_change_at'
+    default:
+      return 'last_state_change_at'
+  }
+}
+
 function fmtDMY(dt) {
   if (!dt) return '-'
   try {
@@ -170,38 +215,43 @@ export default function Reportes() {
 
   useEffect(() => { consultar() }, [mode, fecha, desde, hasta, filtrarFechas])
 
+  const buildParamsEstado = (estado) => {
+    if (!filtrarFechas) return { estado }
+
+    let iniISO = null
+    let finISO = null
+
+    if (mode === 'dia') {
+      iniISO = toCRISO(fecha, '00', '00', '00')
+      finISO = toCRISO(fecha, '23', '59', '59')
+    } else {
+      iniISO = desde ? toCRISO(desde, '00', '00', '00') : null
+      finISO = hasta ? toCRISO(hasta, '23', '59', '59') : null
+    }
+
+    return {
+      estado,
+      tipoFecha: tipoFechaPorEstado(estado),
+      ...(iniISO && { desde: iniISO }),
+      ...(finISO && { hasta: finISO }),
+    }
+  }
+
   const consultar = async () => {
     setLoading(true)
     try {
-      // Snapshot actual (sin filtro) por defecto.
-      // Si el usuario activa "Filtrar por fecha", usamos last_state_change_at (ELSE del SP).
-      let paramsBase = {}
-      if (filtrarFechas) {
-        let iniISO = null, finISO = null
-        if (mode === 'dia') {
-          iniISO = toCRISO(fecha, '00', '00', '00')
-          finISO = toCRISO(fecha, '23', '59', '59')
-        } else {
-          if (!desde && !hasta) { setLoading(false); return }
-          iniISO = desde ? toCRISO(desde, '00', '00', '00') : null
-          finISO = hasta ? toCRISO(hasta, '23', '59', '59') : null
-        }
-
-        paramsBase = {
-          // CAMBIO no existe literal en el SP, pero cae en el ELSE => last_state_change_at
-          tipoFecha: 'CAMBIO',
-          ...(iniISO && { desde: iniISO }),
-          ...(finISO && { hasta: finISO }),
-        }
+      if (filtrarFechas && mode === 'rango' && !desde && !hasta) {
+        setLoading(false)
+        return
       }
 
       const [rPDE, rETL, rNE, rE2, rNEN, rTRCA] = await Promise.all([
-        api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'PRUEBA_DE_ENTREGA' } }),
-        api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'ENTREGADO_A_TRANSPORTISTA_LOCAL' } }),
-        api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' } }),
-        api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO' } }),
-        api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'NO_ENTREGABLE' } }),
-        api.get('/busqueda/estado', { params: { ...paramsBase, estado: 'TR_A_CA' } }),
+        api.get('/busqueda/estado', { params: buildParamsEstado('PRUEBA_DE_ENTREGA') }),
+        api.get('/busqueda/estado', { params: buildParamsEstado('ENTREGADO_A_TRANSPORTISTA_LOCAL') }),
+        api.get('/busqueda/estado', { params: buildParamsEstado('NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE') }),
+        api.get('/busqueda/estado', { params: buildParamsEstado('ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO') }),
+        api.get('/busqueda/estado', { params: buildParamsEstado('NO_ENTREGABLE') }),
+        api.get('/busqueda/estado', { params: buildParamsEstado('TR_A_CA') }),
       ])
 
       const aPDE = Array.isArray(rPDE.data) ? rPDE.data : []
@@ -228,10 +278,18 @@ export default function Reportes() {
   }
 
   const resetear = () => {
-    setMode('dia'); setFecha(hoy); setDesde(hoy); setHasta(hoy)
+    setMode('dia')
+    setFecha(hoy)
+    setDesde(hoy)
+    setHasta(hoy)
     setFiltrarFechas(false)
     setStPruebaEntrega([])
-    setStEntregadoTL([]); setStNoEntregado([]); setStEntregado2do([]); setStNoEntregable([]); setStTrACa([]); setStInventario([])
+    setStEntregadoTL([])
+    setStNoEntregado([])
+    setStEntregado2do([])
+    setStNoEntregable([])
+    setStTrACa([])
+    setStInventario([])
   }
 
   // Proyección fija para tablas/export
@@ -272,32 +330,38 @@ export default function Reportes() {
       ? `actual_${hoy}`
       : (mode === 'dia' ? fecha : `${desde}_${hasta}`)
 
-    const dateKey = 'last_state_change_at'
+    const dateKeyPDE = dateKeyPorEstado('PRUEBA_DE_ENTREGA')
+    const dateKeyETL = dateKeyPorEstado('ENTREGADO_A_TRANSPORTISTA_LOCAL')
+    const dateKeyNE = dateKeyPorEstado('NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE')
+    const dateKeyE2 = dateKeyPorEstado('ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')
+    const dateKeyNEN = dateKeyPorEstado('NO_ENTREGABLE')
+    const dateKeyTRCA = dateKeyPorEstado('TR_A_CA')
+    const dateKeyInventario = dateKeyPorEstado('EN_INVENTARIO')
 
     if (exportFormat === 'xlsx') {
       const wb = XLSX.utils.book_new()
-      // NUEVO: PRUEBA_DE_ENTREGA primero
-      addSheetFixed(wb, SHEET_TITLES.PRUEBA_DE_ENTREGA, stPruebaEntrega, dateKey)
 
-      addSheetFixed(wb, SHEET_TITLES.ENTREGADO_A_TRANSPORTISTA_LOCAL, stEntregadoTL, dateKey)
-      addSheetFixed(wb, SHEET_TITLES.NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE, stNoEntregado, dateKey)
-      addSheetFixed(wb, SHEET_TITLES.ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO, stEntregado2do, dateKey)
-      addSheetFixed(wb, SHEET_TITLES.NO_ENTREGABLE, stNoEntregable, dateKey)
-      addSheetFixed(wb, SHEET_TITLES.TR_A_CA, stTrACa, dateKey)
-      addSheetFixed(wb, SHEET_TITLES.EN_INVENTARIO, stInventario, dateKey)
+      addSheetFixed(wb, SHEET_TITLES.PRUEBA_DE_ENTREGA, stPruebaEntrega, dateKeyPDE)
+      addSheetFixed(wb, SHEET_TITLES.ENTREGADO_A_TRANSPORTISTA_LOCAL, stEntregadoTL, dateKeyETL)
+      addSheetFixed(wb, SHEET_TITLES.NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE, stNoEntregado, dateKeyNE)
+      addSheetFixed(wb, SHEET_TITLES.ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO, stEntregado2do, dateKeyE2)
+      addSheetFixed(wb, SHEET_TITLES.NO_ENTREGABLE, stNoEntregable, dateKeyNEN)
+      addSheetFixed(wb, SHEET_TITLES.TR_A_CA, stTrACa, dateKeyTRCA)
+      addSheetFixed(wb, SHEET_TITLES.EN_INVENTARIO, stInventario, dateKeyInventario)
+
       XLSX.writeFile(wb, `reporte_estados_${stamp}.xlsx`, { compression: true })
       return
     }
 
     // CSV (una sola hoja: todo junto)
     const all = [
-      ...projectRows(stPruebaEntrega, dateKey),
-      ...projectRows(stEntregadoTL, dateKey),
-      ...projectRows(stNoEntregado, dateKey),
-      ...projectRows(stEntregado2do, dateKey),
-      ...projectRows(stNoEntregable, dateKey),
-      ...projectRows(stTrACa, dateKey),
-      ...projectRows(stInventario, dateKey),
+      ...projectRows(stPruebaEntrega, dateKeyPDE),
+      ...projectRows(stEntregadoTL, dateKeyETL),
+      ...projectRows(stNoEntregado, dateKeyNE),
+      ...projectRows(stEntregado2do, dateKeyE2),
+      ...projectRows(stNoEntregable, dateKeyNEN),
+      ...projectRows(stTrACa, dateKeyTRCA),
+      ...projectRows(stInventario, dateKeyInventario),
     ]
 
     const allWithIntranet = all.map(d => ({
@@ -335,7 +399,7 @@ export default function Reportes() {
             checked={filtrarFechas}
             onChange={(e) => setFiltrarFechas(e.target.checked)}
           />
-          Filtrar por fecha (último cambio)
+          Filtrar por fecha operativa
         </label>
 
         <button onClick={generarReporte} disabled={loading || totalFilas() === 0}>
@@ -380,40 +444,39 @@ export default function Reportes() {
         {kpi.map((k, i) => <Kpi key={i} title={k.title} value={k.value} />)}
       </div>
 
-      {/* NUEVO: matriz/tabla al inicio */}
       <section style={{ marginTop: 8 }}>
         <h4>Prueba de Entrega {filtrarFechas ? (mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)) : '(Actual)'}</h4>
-        <DataTable rows={stPruebaEntrega} dateKey="last_state_change_at" />
+        <DataTable rows={stPruebaEntrega} dateKey={dateKeyPorEstado('PRUEBA_DE_ENTREGA')} />
       </section>
 
       <section style={{ marginTop: 16 }}>
         <h4>Entregado a transportista local {filtrarFechas ? (mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)) : '(Actual)'}</h4>
-        <DataTable rows={stEntregadoTL} dateKey="last_state_change_at" />
+        <DataTable rows={stEntregadoTL} dateKey={dateKeyPorEstado('ENTREGADO_A_TRANSPORTISTA_LOCAL')} />
       </section>
 
       <section style={{ marginTop: 16 }}>
         <h4>No entregado - Consignatario no disponible {filtrarFechas ? (mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)) : '(Actual)'}</h4>
-        <DataTable rows={stNoEntregado} dateKey="last_state_change_at" />
+        <DataTable rows={stNoEntregado} dateKey={dateKeyPorEstado('NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE')} />
       </section>
 
       <section style={{ marginTop: 16 }}>
         <h4>Entregado a transportista local - 2do intento {filtrarFechas ? (mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)) : '(Actual)'}</h4>
-        <DataTable rows={stEntregado2do} dateKey="last_state_change_at" />
+        <DataTable rows={stEntregado2do} dateKey={dateKeyPorEstado('ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')} />
       </section>
 
       <section style={{ marginTop: 16 }}>
         <h4>No entregable - Retornado a oficina local {filtrarFechas ? (mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)) : '(Actual)'}</h4>
-        <DataTable rows={stNoEntregable} dateKey="last_state_change_at" />
+        <DataTable rows={stNoEntregable} dateKey={dateKeyPorEstado('NO_ENTREGABLE')} />
       </section>
 
       <section style={{ marginTop: 16 }}>
         <h4>TR a CA {filtrarFechas ? (mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)) : '(Actual)'}</h4>
-        <DataTable rows={stTrACa} dateKey="last_state_change_at" />
+        <DataTable rows={stTrACa} dateKey={dateKeyPorEstado('TR_A_CA')} />
       </section>
 
       <section style={{ marginTop: 16 }}>
         <h4>En inventario {filtrarFechas ? (mode === 'dia' ? `(${fecha})` : rangoLabel(desde, hasta)) : '(Actual)'}</h4>
-        <DataTable rows={stInventario} dateKey="last_state_change_at" />
+        <DataTable rows={stInventario} dateKey={dateKeyPorEstado('EN_INVENTARIO')} />
       </section>
     </div>
   )
