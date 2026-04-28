@@ -554,7 +554,7 @@ export default function Dashboard() {
       </div>
 
       <div style={{ marginTop: 16 }}>
-        <h4>Ver paquetes por fecha (según recepción REAL)</h4>
+        <h4>Ver paquetes por fecha</h4>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
           <label>Fecha:
             <input type="date" value={fechaPF} onChange={e => setFechaPF(e.target.value)} style={{ marginLeft: 4 }} />
@@ -618,7 +618,7 @@ export default function Dashboard() {
       </div>
 
       <div style={{ marginTop: 16 }}>
-        <h4>Resumen mensual (matriz tipo hoja)</h4>
+        <h4>Resumen mensual</h4>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
           <label>Mes:
             <input

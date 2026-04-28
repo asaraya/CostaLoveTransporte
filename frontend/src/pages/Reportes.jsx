@@ -399,7 +399,7 @@ export default function Reportes() {
             checked={filtrarFechas}
             onChange={(e) => setFiltrarFechas(e.target.checked)}
           />
-          Filtrar por fecha operativa
+          Filtrar por fecha
         </label>
 
         <button onClick={generarReporte} disabled={loading || totalFilas() === 0}>

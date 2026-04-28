@@ -292,7 +292,7 @@ export default function Recepcion() {
 
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button onClick={onPreregistrar} disabled={loadingPre || trackings.length === 0}>
-                {loadingPre ? 'Preregistrando…' : 'Preregistrar paquetes'}
+                {loadingPre ? 'Preregistrando…' : 'Registrar paquetes'}
               </button>
               <button onClick={() => { setRawTrackings(''); setLog([]) }} disabled={loadingPre || loadingTrACa}>
                 Limpiar
