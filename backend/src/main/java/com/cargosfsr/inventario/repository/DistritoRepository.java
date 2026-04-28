@@ -17,3 +17,4 @@ public interface DistritoRepository extends JpaRepository<Distrito, Long> {
 
     List<Distrito> findByNombreContainingIgnoreCaseAndActivoTrueOrderByNombreAsc(String q);
 }
+ 
