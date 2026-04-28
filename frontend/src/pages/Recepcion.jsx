@@ -294,9 +294,6 @@ export default function Recepcion() {
               <button onClick={onPreregistrar} disabled={loadingPre || trackings.length === 0}>
                 {loadingPre ? 'Preregistrando…' : 'Preregistrar paquetes'}
               </button>
-              <button onClick={onCambiarTrACa} disabled={loadingTrACa || loadingPre || trackings.length === 0}>
-                {loadingTrACa ? 'Cambiando…' : 'Cambiar a TR a CA'}
-              </button>
               <button onClick={() => { setRawTrackings(''); setLog([]) }} disabled={loadingPre || loadingTrACa}>
                 Limpiar
               </button>
