@@ -11,6 +11,7 @@ import Login from './pages/Login.jsx'
 import Register from './pages/Register.jsx'
 import AdminProfile from './pages/AdminProfile.jsx'
 import logoUrl from './assets/cargo_logo.svg'
+import HojaRuta from './pages/HojaRuta.jsx'
 import { api } from './api'
 
 // ----- Helper de clase activa para NavLink -----
@@ -241,6 +242,9 @@ export default function App() {
               <NavLink className={link} to="/reportes">
                 Reportes
               </NavLink>
+              <NavLink className={link} to="/hoja-ruta">
+                Hoja de Ruta
+              </NavLink>
               <NavLink className={link} to="/importar">
                 Importar
               </NavLink>
@@ -381,6 +385,14 @@ export default function App() {
             element={
               <RequireAuth>
                 <Reportes />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/hoja-ruta"
+            element={
+              <RequireAuth>
+                <HojaRuta />
               </RequireAuth>
             }
           />
