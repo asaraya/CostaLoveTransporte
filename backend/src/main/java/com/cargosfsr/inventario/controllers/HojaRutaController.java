@@ -19,6 +19,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -376,6 +377,22 @@ public class HojaRutaController {
         }
 
         List<String> trackings = normalizeTrackings(body.trackings);
+
+        // NUEVO:
+        // Si la edición deja la hoja sin paquetes, se elimina por completo.
+        if (trackings.isEmpty()) {
+            int detallesEliminados = jdbc.update("DELETE FROM hoja_ruta_detalle WHERE hoja_ruta_id = ?", id);
+            int hojasEliminadas = jdbc.update("DELETE FROM hojas_ruta WHERE id = ?", id);
+
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("ok", true);
+            out.put("deleted", hojasEliminadas > 0);
+            out.put("id", id);
+            out.put("fecha", fecha.toString());
+            out.put("detallesEliminados", detallesEliminados);
+            return out;
+        }
+
         Map<String, Map<String, Object>> paquetes = cargarPaquetesPorTracking(trackings);
         validarPaquetesExisten(trackings, paquetes);
         validarNoAsignadosMismoDia(fecha, trackings, id);
@@ -395,9 +412,26 @@ public class HojaRutaController {
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("ok", true);
+        out.put("deleted", false);
         out.put("id", id);
         out.put("fecha", fecha.toString());
         out.put("total", trackings.size());
+        return out;
+    }
+
+    @DeleteMapping("/{id}")
+    @Transactional
+    public Map<String, Object> eliminar(@PathVariable long id) {
+        buscarHojaPorId(id);
+
+        int detallesEliminados = jdbc.update("DELETE FROM hoja_ruta_detalle WHERE hoja_ruta_id = ?", id);
+        int hojasEliminadas = jdbc.update("DELETE FROM hojas_ruta WHERE id = ?", id);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("ok", true);
+        out.put("deleted", hojasEliminadas > 0);
+        out.put("id", id);
+        out.put("detallesEliminados", detallesEliminados);
         return out;
     }
 }

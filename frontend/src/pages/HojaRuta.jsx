@@ -92,7 +92,7 @@ function HojaRutaTable({ paquetes, editing, onRemove }) {
           {rows.length === 0 ? (
             <tr>
               <td colSpan={editing ? 8 : 7} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>
-                Sin paquetes
+                Sin paquetes. Al guardar, esta hoja se eliminará por completo.
               </td>
             </tr>
           ) : rows.map((p, idx) => (
@@ -143,6 +143,7 @@ export default function HojaRuta() {
   const [editId, setEditId] = useState(null)
   const [editRows, setEditRows] = useState([])
   const [savingEdit, setSavingEdit] = useState(false)
+  const [deletingId, setDeletingId] = useState(null)
 
   useEffect(() => {
     cargarTransportistas()
@@ -229,17 +230,27 @@ export default function HojaRuta() {
   }
 
   const guardarEdicion = async (hojaId) => {
+    const nuevosTrackings = editRows
+      .map(r => String(r?.tracking_code ?? '').trim().toUpperCase())
+      .filter(Boolean)
+
+    if (nuevosTrackings.length === 0) {
+      const ok = confirm('Esta hoja quedó sin paquetes. Al guardar se eliminará por completo. ¿Continuar?')
+      if (!ok) return
+    }
+
     setSavingEdit(true)
     try {
-      const nuevosTrackings = editRows
-        .map(r => String(r?.tracking_code ?? '').trim().toUpperCase())
-        .filter(Boolean)
-
-      await api.put(`/hojas-ruta/${encodeURIComponent(hojaId)}`, {
+      const { data } = await api.put(`/hojas-ruta/${encodeURIComponent(hojaId)}`, {
         trackings: nuevosTrackings,
       })
 
-      toastOk('Hoja de ruta actualizada')
+      if (data?.deleted) {
+        toastOk('Hoja de ruta eliminada porque quedó sin paquetes')
+      } else {
+        toastOk('Hoja de ruta actualizada')
+      }
+
       setEditId(null)
       setEditRows([])
       await consultarHojas()
@@ -247,6 +258,35 @@ export default function HojaRuta() {
       toastErr(e)
     } finally {
       setSavingEdit(false)
+    }
+  }
+
+  const eliminarHoja = async (hoja) => {
+    if (!hoja?.id) return
+
+    const total = Array.isArray(hoja.paquetes) ? hoja.paquetes.length : 0
+    const msg =
+      `¿Eliminar la hoja de ruta #${hoja.id} de ${hoja.transportista ?? 'este transportista'}?\n\n` +
+      `Se quitarán ${total} paquete(s) de esta hoja de ruta.\n` +
+      `Esto NO elimina los paquetes del sistema ni cambia su estado.`
+
+    if (!confirm(msg)) return
+
+    setDeletingId(hoja.id)
+    try {
+      await api.delete(`/hojas-ruta/${encodeURIComponent(hoja.id)}`)
+      toastOk('Hoja de ruta eliminada')
+
+      if (editId === hoja.id) {
+        setEditId(null)
+        setEditRows([])
+      }
+
+      await consultarHojas()
+    } catch (e) {
+      toastErr(e)
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -380,6 +420,7 @@ export default function HojaRuta() {
           ) : hojas.map(hoja => {
             const editing = editId === hoja.id
             const paquetes = editing ? editRows : (hoja.paquetes || [])
+            const deleting = deletingId === hoja.id
 
             return (
               <div key={hoja.id} style={{ marginBottom: 18, border: '1px solid rgba(22,62,122,.16)', borderRadius: 12, padding: 12 }}>
@@ -393,13 +434,24 @@ export default function HojaRuta() {
 
                   <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
                     {!editing ? (
-                      <button type="button" onClick={() => empezarEditar(hoja)}>
-                        Editar
-                      </button>
+                      <>
+                        <button type="button" onClick={() => empezarEditar(hoja)} disabled={deleting}>
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => eliminarHoja(hoja)}
+                          disabled={deleting}
+                          style={deleteSheetBtn}
+                          title="Eliminar esta hoja de ruta completa"
+                        >
+                          {deleting ? 'Eliminando…' : 'Eliminar hoja'}
+                        </button>
+                      </>
                     ) : (
                       <>
                         <button type="button" onClick={() => guardarEdicion(hoja.id)} disabled={savingEdit}>
-                          {savingEdit ? 'Guardando…' : 'Guardar'}
+                          {savingEdit ? 'Guardando…' : (editRows.length === 0 ? 'Eliminar hoja vacía' : 'Guardar')}
                         </button>
                         <button type="button" onClick={cancelarEditar} disabled={savingEdit}>
                           Cancelar
@@ -455,5 +507,15 @@ const dangerBtn = {
   borderRadius: 8,
   padding: '4px 10px',
   fontWeight: 800,
+  cursor: 'pointer',
+}
+
+const deleteSheetBtn = {
+  border: '1px solid #c62828',
+  background: '#fff5f5',
+  color: '#c62828',
+  borderRadius: 8,
+  padding: '6px 10px',
+  fontWeight: 700,
   cursor: 'pointer',
 }
