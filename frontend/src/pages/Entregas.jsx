@@ -16,7 +16,7 @@ function ymdToCRNoonISO(ymd) {
   return d.toISOString()
 }
 
-// Parser: separa por coma/espacio/salto de línea, uppercase, sin duplicados, y filtra HZCR/CR
+// Parser: separa por coma/espacio/salto de línea, uppercase, sin duplicados, y filtra CR/HZCR/LM
 function parseTokens(raw) {
   if (!raw) return []
   const tokens = raw
@@ -26,7 +26,7 @@ function parseTokens(raw) {
 
   const seen = new Set()
   const out = []
-  const re = /^(HZCR|CR)\d+$/i
+  const re = /^(HZCR|CR|LM)[A-Z0-9]+$/i
 
   for (const t of tokens) {
     if (re.test(t) && !seen.has(t)) {
@@ -275,7 +275,7 @@ export default function Entregas() {
             <label>Trackings (coma, espacio o salto de línea):</label>
             <textarea
               rows={8}
-              placeholder="HZCR12345 CR98765 ..."
+              placeholder="HZCR12345 CR98765 LMXXXXXXXX ..."
               value={raw}
               onChange={(e) => setRaw(e.target.value)}
               style={{ width: '100%', marginTop: 6 }}

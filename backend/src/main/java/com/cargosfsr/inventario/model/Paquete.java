@@ -18,20 +18,16 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.Lob;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
 
 @Entity
-@Table(
-    name = "paquetes",
-    uniqueConstraints = @UniqueConstraint(name = "uk_paquetes_tracking", columnNames = "tracking_code")
-)
+@Table(name = "paquetes")
 public class Paquete {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "tracking_code", nullable = false, length = 100)
+    @Column(name = "tracking_code", nullable = false, columnDefinition = "LONGTEXT")
     private String trackingCode;
 
     @Column(nullable = true, length = 150)

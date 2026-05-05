@@ -737,16 +737,16 @@ public class ImportService {
     }
 
     // Regex amplio
-    private static final Pattern P_TRACK = Pattern.compile("(?i)\\b(?!MUEBLE)(?!CAJA)(?!DISTRITO)[A-Z]{2,4}[A-Z0-9]{6,18}\\b");
+    private static final Pattern P_TRACK = Pattern.compile("(?i)\\b(?:HZCR|CR|LM)[A-Z0-9]+\\b");
 
     private static boolean looksLikeTracking(String s) {
         if (s == null) return false;
         String t = s.trim();
-        if (t.length() < 8 || t.length() > 24) return false;
+        if (!P_TRACK.matcher(t).find()) return false;
         if (t.matches("\\d+")) return false;
         String up = t.toUpperCase(Locale.ROOT);
         if (up.startsWith("MUEBLE") || up.startsWith("CAJA") || up.startsWith("DISTRITO")) return false;
-        return P_TRACK.matcher(t).find();
+        return true;
     }
 
     private static boolean isValidTracking(String s) {

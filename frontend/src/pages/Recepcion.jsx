@@ -24,7 +24,7 @@ function parseTokens(raw) {
 
   const seen = new Set()
   const out = []
-  const re = /^(HZCR|CR)\d+$/i
+  const re = /^(HZCR|CR|LM)[A-Z0-9]+$/i
 
   for (const t of tokens) {
     if (re.test(t) && !seen.has(t)) {
@@ -144,7 +144,7 @@ export default function Recepcion() {
         return
       }
       if (!trackings.length) {
-        toastErr({ message: 'Ingresá al menos un tracking válido (HZCR/CR + dígitos)' })
+        toastErr({ message: 'Ingresá al menos un tracking válido (CR/HZCR/LM + caracteres)' })
         return
       }
 
@@ -186,7 +186,7 @@ export default function Recepcion() {
   const onCambiarTrACa = async () => {
     try {
       if (!trackings.length) {
-        toastErr({ message: 'Ingresá al menos un tracking válido (HZCR/CR + dígitos)' })
+        toastErr({ message: 'Ingresá al menos un tracking válido (CR/HZCR/LM + caracteres)' })
         return
       }
 
@@ -283,7 +283,7 @@ export default function Recepcion() {
             <label>Trackings (coma/espacio/salto de línea):</label>
             <textarea
               rows={8}
-              placeholder="HZCR12345 CR98765 ..."
+              placeholder="HZCR12345 CR98765 LMXXXXXXXX ..."
               value={rawTrackings}
               onChange={(e) => setRawTrackings(e.target.value)}
               style={{ width: '100%' }}

@@ -27,9 +27,9 @@ import jakarta.persistence.PersistenceContext;
 @Service
 public class RegistroService {
 
-    // Acepta CR123, HZCR1, HZCR123456, etc.
+    // Acepta CR..., HZCR... y LM... sin límite artificial de longitud.
     private static final Pattern TRACKING_PATTERN =
-            Pattern.compile("^(HZCR|CR)\\d+$", Pattern.CASE_INSENSITIVE);
+            Pattern.compile("^(HZCR|CR|LM)[A-Z0-9]+$", Pattern.CASE_INSENSITIVE);
 
     private final PaqueteRepository paquetes;
     private final SacoRepository sacos;
@@ -85,7 +85,7 @@ public class RegistroService {
         final String dname = distritoNombre.trim();
 
         require(TRACKING_PATTERN.matcher(t).matches(),
-                "tracking inválido: debe iniciar con HZCR o CR seguido de dígitos");
+                "tracking inválido: debe iniciar con CR, HZCR o LM seguido de caracteres alfanuméricos");
 
         if (paquetes.findByTrackingCode(t).isPresent()) {
             throw new IllegalArgumentException("No se pueden ingresar trackings repetidos: " + t);

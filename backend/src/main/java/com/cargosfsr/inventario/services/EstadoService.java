@@ -35,7 +35,7 @@ public class EstadoService {
     private final CurrentUser currentUser;
 
     private static final Pattern TRACKING_PATTERN =
-            Pattern.compile("(HZCR|CR)\\d+", Pattern.CASE_INSENSITIVE);
+            Pattern.compile("(?:HZCR|CR|LM)[A-Z0-9]+", Pattern.CASE_INSENSITIVE);
 
     /**
      * Mensajería operativa:
@@ -150,7 +150,7 @@ public class EstadoService {
         if (!StringUtils.hasText(tracking)) throw new IllegalArgumentException("Tracking requerido");
         String t = tracking.trim().toUpperCase();
         if (!TRACKING_PATTERN.matcher(t).matches())
-            throw new IllegalArgumentException("Formato de tracking inválido (HZCR/CR + dígitos)");
+            throw new IllegalArgumentException("Formato de tracking inválido (CR/HZCR/LM + caracteres alfanuméricos)");
 
         Paquete p = paquetes.findByTrackingCode(t).orElseThrow(
             () -> new IllegalArgumentException("No existe paquete con tracking: " + t)
@@ -414,7 +414,7 @@ public class EstadoService {
         if (!StringUtils.hasText(tracking)) throw new IllegalArgumentException("Tracking requerido");
         String t = tracking.trim().toUpperCase();
         if (!TRACKING_PATTERN.matcher(t).matches())
-            throw new IllegalArgumentException("Formato de tracking inválido (HZCR/CR + dígitos)");
+            throw new IllegalArgumentException("Formato de tracking inválido (CR/HZCR/LM + caracteres alfanuméricos)");
         if (!StringUtils.hasText(statusExterno)) throw new IllegalArgumentException("status externo requerido");
 
         String user = actor(changedByIgnored);
