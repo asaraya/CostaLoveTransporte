@@ -296,7 +296,7 @@ export default function Reportes() {
   const projectRows = (rows, dateKey) => {
     return (rows || []).map(r => ({
       marchamo: r?.marchamo ?? '-',
-      mueble: r?.distrito_nombre ?? '-',
+      mueble: r?.ubicacion_codigo ?? '-',
       tracking: r?.tracking_code ?? '-',
       nombre: r?.recipient_name ?? '-',
       descripcion: r?.content_description ?? '-',
@@ -525,7 +525,7 @@ function rangoLabel(desde, hasta) {
 function DataTable({ rows, dateKey }) {
   const data = (rows || []).map(r => ({
     marchamo: r?.marchamo ?? '-',
-    mueble: r?.distrito_nombre ?? '-',
+    mueble: r?.ubicacion_codigo ?? '-',
     tracking: r?.tracking_code ?? '-',
     nombre: r?.recipient_name ?? '-',
     descripcion: r?.content_description ?? '-',

@@ -53,6 +53,10 @@ public class Paquete {
     @JoinColumn(name = "distrito_id", nullable = false)
     private Distrito distrito;
 
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "ubicacion_id", nullable = false)
+    private Ubicacion ubicacion;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 80)
     private PaqueteEstado estado = PaqueteEstado.ENTREGADO_A_TRANSPORTISTA_LOCAL;
@@ -123,6 +127,9 @@ public class Paquete {
 
     public Distrito getDistrito() { return distrito; }
     public void setDistrito(Distrito distrito) { this.distrito = distrito; }
+
+    public Ubicacion getUbicacion() { return ubicacion; }
+    public void setUbicacion(Ubicacion ubicacion) { this.ubicacion = ubicacion; }
 
     public PaqueteEstado getEstado() { return estado; }
     public void setEstado(PaqueteEstado estado) { this.estado = estado; }

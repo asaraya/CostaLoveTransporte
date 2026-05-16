@@ -40,9 +40,11 @@ export default function Recepcion() {
   const [marchamo, setMarchamo] = useState('')
   const [rawTrackings, setRawTrackings] = useState('')
 
-  // Distrito (reemplaza Ubicación)
+  // Distrito = zona/ruta; Ubicación = mueble/estantería física
   const [distritoNombre, setDistritoNombre] = useState('')
   const [distritos, setDistritos] = useState(FALLBACK_DISTRICTS)
+  const [ubicacionCodigo, setUbicacionCodigo] = useState('')
+  const [ubicaciones, setUbicaciones] = useState([])
 
   const trackings = useMemo(() => parseTokens(rawTrackings), [rawTrackings])
 
@@ -86,6 +88,25 @@ export default function Recepcion() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Cargar ubicaciones/muebles activos desde backend.
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const { data } = await api.get('/ubicaciones/codigos', { params: { tipo: 'MUEBLE' } })
+        const list = Array.isArray(data) ? data.filter(Boolean) : []
+        if (alive) {
+          setUbicaciones(list)
+          if (!ubicacionCodigo && list.length) setUbicacionCodigo(list[0])
+        }
+      } catch (e) {
+        if (alive) toastErr(e)
+      }
+    })()
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const onCrearSaco = async () => {
     try {
       const m = (marchamo || '').trim()
@@ -101,6 +122,7 @@ export default function Recepcion() {
       const payload = {
         marchamo: m,
         defaultDistritoNombre: (distritoNombre || '').trim() || undefined,
+        defaultUbicacionCodigo: (ubicacionCodigo || '').trim() || undefined,
       }
 
       const { data } = await api.post('/sacos', payload)
@@ -134,6 +156,7 @@ export default function Recepcion() {
     try {
       const m = (marchamo || '').trim()
       const d = (distritoNombre || '').trim()
+      const u = (ubicacionCodigo || '').trim()
 
       if (!m) {
         toastErr({ message: 'Marchamo requerido' })
@@ -141,6 +164,10 @@ export default function Recepcion() {
       }
       if (!d) {
         toastErr({ message: 'Distrito requerido' })
+        return
+      }
+      if (!u) {
+        toastErr({ message: 'Ubicación/mueble requerido' })
         return
       }
       if (!trackings.length) {
@@ -158,17 +185,16 @@ export default function Recepcion() {
 
       for (const t of trackings) {
         try {
-          // ✅ Nuevo contrato: { tracking, marchamo, distritoNombre, receivedAt }
-          // (trackingCode se puede omitir; uso tracking por claridad)
           // eslint-disable-next-line no-await-in-loop
           const { data } = await api.post('/paquetes', {
             tracking: t,
             marchamo: m,
             distritoNombre: d,
+            ubicacionCodigo: u,
             receivedAt,
           })
           ok++
-          appendLog(`✅ ${t} preregistrado (Distrito: ${d}) → id ${data?.paquete_id ?? data?.id ?? ''}`)
+          appendLog(`✅ ${t} preregistrado (Distrito: ${d}, Ubicación: ${u}) → id ${data?.paquete_id ?? data?.id ?? ''}`)
         } catch (e) {
           fail++
           appendLog(`❌ ${t}: ${e?.response?.data?.message || e.message}`)
@@ -262,6 +288,19 @@ export default function Recepcion() {
                 onChange={(e) => setDistritoNombre(e.target.value)}
               >
                 {distritos.map((x) => (
+                  <option key={x} value={x}>{x}</option>
+                ))}
+              </select>
+            </label>
+
+            <label style={{ display: 'grid', gap: 6 }}>
+              <span>Ubicación / Mueble:</span>
+              <select
+                value={ubicacionCodigo}
+                onChange={(e) => setUbicacionCodigo(e.target.value)}
+              >
+                <option value="">Seleccione…</option>
+                {ubicaciones.map((x) => (
                   <option key={x} value={x}>{x}</option>
                 ))}
               </select>

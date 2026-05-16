@@ -8,6 +8,7 @@ const EXCLUDED_COLUMNS = new Set([
   'status_externo', 'status_externo_at',
   'saco_id',
   'distrito_id',
+  'ubicacion_id', 'ubicacion_tipo', 'mueble', 'estanteria', 'caja',
 ])
 
 /* === COLUMNA FIJA Y ORDEN CONSISTENTE === */
@@ -20,6 +21,7 @@ const FIXED_COLUMNS = [
   'estado',
   'devolucion_subtipo',
   'distrito_nombre',
+  'ubicacion_codigo',
   'received_at',
   'delivered_at',
   'returned_at',
@@ -41,6 +43,7 @@ const HEADERS_ES = {
   estado: 'Estado',
   devolucion_subtipo: 'Subtipo devolución',
   distrito_nombre: 'Distrito',
+  ubicacion_codigo: 'Ubicación',
   received_at: 'Recepción',
   delivered_at: 'Entrega',
   returned_at: 'Devolución',
@@ -59,6 +62,7 @@ const SEARCH_TYPES = [
   { key: 'nombre',    label: 'Nombre destinatario' },
   { key: 'direccion', label: 'Dirección' },
   { key: 'distrito',  label: 'Distrito' },
+  { key: 'ubicacion', label: 'Ubicación / Mueble' },
   { key: 'vigencia',  label: 'Vigencia' },
   { key: 'aviso',     label: 'Aviso' },
 ]
@@ -228,6 +232,7 @@ function normalizeRow(r) {
     estado:                asValue(pick('estado')),
     devolucion_subtipo:    asValue(pick('devolucion_subtipo', 'devolucionSubtipo')),
     distrito_nombre:       asValue(pick('distrito_nombre', 'distritoNombre')),
+    ubicacion_codigo:      asValue(pick('ubicacion_codigo', 'ubicacionCodigo')),
     received_at:           asValue(pick('received_at', 'receivedAt')),
     delivered_at:          asValue(pick('delivered_at', 'deliveredAt')),
     returned_at:           asValue(pick('returned_at', 'returnedAt')),
@@ -328,6 +333,12 @@ export default function Inventario() {
           const { data } = await api.get(`/busqueda/distrito/${encodeURIComponent(q)}/count`)
           total = data?.total ?? 0
         }
+      } else if (effSearchType === 'ubicacion') {
+        if (!q.trim()) total = 0
+        else {
+          const { data } = await api.get(`/busqueda/ubicacion/${encodeURIComponent(q)}/count`)
+          total = data?.total ?? 0
+        }
       } else if (effSearchType === 'vigencia') {
         const parsed = parseVigenciaInput(q)
         if (!parsed.ok) total = 0
@@ -390,6 +401,9 @@ export default function Inventario() {
         data = normalizeRows(resp)
       } else if (effSearchType === 'distrito') {
         const { data: resp } = await api.get(`/busqueda/distrito/${encodeURIComponent(effQuery || '')}`)
+        data = normalizeRows(resp)
+      } else if (effSearchType === 'ubicacion') {
+        const { data: resp } = await api.get(`/busqueda/ubicacion/${encodeURIComponent(effQuery || '')}`)
         data = normalizeRows(resp)
       } else if (effSearchType === 'vigencia') {
         const parsed = parseVigenciaInput(effQuery)
@@ -771,6 +785,18 @@ export default function Inventario() {
               onChange={e => setQuery(e.target.value)}
               onKeyDown={onEnter}
               placeholder="Roxana"
+            />
+          </>
+        )}
+
+        {searchType === 'ubicacion' && (
+          <>
+            <label>Ubicación / Mueble:</label>
+            <input
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              onKeyDown={onEnter}
+              placeholder="M 10'3"
             />
           </>
         )}

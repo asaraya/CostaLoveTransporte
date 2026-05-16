@@ -51,15 +51,17 @@ public class PaqueteController {
                 ? body.getTracking()
                 : body.getTrackingCode(); // compat
 
-        // distrito (nuevo). Si te quedara algún FE viejo mandando "ubicacionCodigo", lo aceptamos como alias.
-        String distrito = (body.getDistritoNombre() != null && !body.getDistritoNombre().isBlank())
-                ? body.getDistritoNombre()
-                : body.getUbicacionCodigo(); // alias
+        // distrito = zona/ruta; ubicación = mueble/estantería física.
+        String distrito = body.getDistritoNombre();
+        String ubicacionCodigo = (body.getUbicacionCodigo() != null && !body.getUbicacionCodigo().isBlank())
+                ? body.getUbicacionCodigo()
+                : body.getMuebleCodigo();
 
         return registroService.preregistrar(
             tracking,
             body.getMarchamo(),
             distrito,
+            ubicacionCodigo,
             body.getReceivedAt()
         );
     }
@@ -139,11 +141,8 @@ public class PaqueteController {
             m.put("recipientAddress", r.getRecipientAddress());
             m.put("marchamo", r.getMarchamo());
 
-            // nuevo
             m.put("distritoNombre", r.getDistritoNombre());
-
-            // alias por compat (si un FE viejo lo consume)
-            m.put("ubicacionCodigo", r.getDistritoNombre());
+            m.put("ubicacionCodigo", r.getUbicacionCodigo());
             return m;
         }).collect(Collectors.toList());
     }
@@ -155,8 +154,9 @@ public class PaqueteController {
         private String tracking;     // alternativo
         private String marchamo;
 
-        private String distritoNombre; // NUEVO
-        private String ubicacionCodigo; // alias compat
+        private String distritoNombre;
+        private String ubicacionCodigo; // ubicación/mueble físico (ej: M 10'3)
+        private String muebleCodigo;    // alias explícito
 
         @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
         private Instant receivedAt;
@@ -175,6 +175,9 @@ public class PaqueteController {
 
         public String getUbicacionCodigo() { return ubicacionCodigo; }
         public void setUbicacionCodigo(String ubicacionCodigo) { this.ubicacionCodigo = ubicacionCodigo; }
+
+        public String getMuebleCodigo() { return muebleCodigo; }
+        public void setMuebleCodigo(String muebleCodigo) { this.muebleCodigo = muebleCodigo; }
 
         public Instant getReceivedAt() { return receivedAt; }
         public void setReceivedAt(Instant receivedAt) { this.receivedAt = receivedAt; }

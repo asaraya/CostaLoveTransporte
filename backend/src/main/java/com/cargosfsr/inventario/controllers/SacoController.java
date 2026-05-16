@@ -34,11 +34,11 @@ public class SacoController {
 
     // =======================
     // Crear Saco (idempotente)
-    // Body: { marchamo, defaultDistritoNombre? }
+    // Body: { marchamo, defaultDistritoNombre?, defaultUbicacionCodigo? }
     // =======================
     @PostMapping
     public ResponseEntity<Saco> crear(@Valid @RequestBody CrearSacoReq req) {
-        Saco s = registro.crearSaco(req.marchamo, req.defaultDistritoNombre);
+        Saco s = registro.crearSaco(req.marchamo, req.defaultDistritoNombre, req.getDefaultUbicacionCodigo());
         return ResponseEntity.status(HttpStatus.CREATED).body(s);
     }
 
@@ -64,5 +64,11 @@ public class SacoController {
         @NotBlank
         public String marchamo;
         public String defaultDistritoNombre;
+        public String defaultUbicacionCodigo;
+        public String ubicacionCodigo; // alias FE antiguo
+
+        public String getDefaultUbicacionCodigo() {
+            return (defaultUbicacionCodigo != null && !defaultUbicacionCodigo.isBlank()) ? defaultUbicacionCodigo : ubicacionCodigo;
+        }
     }
 }

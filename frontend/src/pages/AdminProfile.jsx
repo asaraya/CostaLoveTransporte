@@ -18,6 +18,10 @@ export default function AdminProfile() {
   // ✅ Crear mensajero (solo nombre -> llama SP vía backend: POST /admin/mensajeros)
   const [mForm, setMForm] = useState({ fullName: "" });
 
+  // ✅ Muebles / ubicaciones
+  const [muebleForm, setMuebleForm] = useState({ mueble: "", estanterias: "" });
+  const [delMueble, setDelMueble] = useState("");
+
   // ✅ Distritos
   const [distritos, setDistritos] = useState([]);
   const [dForm, setDForm] = useState({ nombre: "" });
@@ -220,6 +224,59 @@ export default function AdminProfile() {
     }
   };
 
+  // ===== Muebles / Ubicaciones =====
+
+  const onAddMueble = async (e) => {
+    e.preventDefault();
+    const mueble = Number(muebleForm.mueble);
+    const estanterias = Number(muebleForm.estanterias);
+
+    if (!Number.isInteger(mueble) || mueble <= 0) {
+      setMsg("Número de mueble inválido");
+      return;
+    }
+    if (!Number.isInteger(estanterias) || estanterias <= 0) {
+      setMsg("Número de estanterías inválido");
+      return;
+    }
+
+    setLoading(true);
+    setMsg("");
+    try {
+      await api.post("/admin/muebles", { mueble, estanterias });
+      setMuebleForm({ mueble: "", estanterias: "" });
+      setMsg(`Mueble ${mueble} agregado/actualizado con ${estanterias} estantería(s)`);
+    } catch (err) {
+      setMsg(err?.response?.data?.message || err.message || "Error agregando mueble");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onDeleteMueble = async (e) => {
+    e.preventDefault();
+    const num = Number(delMueble);
+
+    if (!Number.isInteger(num) || num <= 0) {
+      setMsg("Número de mueble inválido");
+      return;
+    }
+    if (!confirm(`¿Eliminar el mueble ${num}? Los paquetes se moverán a PENDIENTE.`)) return;
+
+    setLoading(true);
+    setMsg("");
+    try {
+      const { data } = await api.delete(`/admin/muebles/${num}`);
+      if (data?.ok === false) throw new Error(data?.message || "No se pudo eliminar");
+      setDelMueble("");
+      setMsg(`Mueble ${num} eliminado. Paquetes movidos: ${data?.paquetes_movidos ?? 0}. Estanterías eliminadas: ${data?.ubicaciones_eliminadas ?? 0}.`);
+    } catch (err) {
+      setMsg(err?.response?.data?.message || err.message || "Error eliminando mueble");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="container" style={{ maxWidth: 900, margin: "20px auto" }}>
       <h1>Perfil de administrador</h1>
@@ -283,6 +340,34 @@ export default function AdminProfile() {
           </button>
         </form>
 
+        <form onSubmit={onAddMueble} style={{ border: "1px solid #eee", padding: 16 }}>
+          <h2>Agregar mueble</h2>
+          <div>
+            <label>Mueble #</label>
+            <input
+              type="number"
+              value={muebleForm.mueble}
+              onChange={(e) => setMuebleForm({ ...muebleForm, mueble: e.target.value })}
+              placeholder="Ej: 10"
+              required
+            />
+          </div>
+          <div>
+            <label>Estanterías</label>
+            <input
+              type="number"
+              value={muebleForm.estanterias}
+              onChange={(e) => setMuebleForm({ ...muebleForm, estanterias: e.target.value })}
+              placeholder="Ej: 5"
+              required
+            />
+          </div>
+          <p style={{ fontSize: 12, opacity: .75 }}>Formato generado: M &lt;mueble&gt;'&lt;estantería&gt; (ej: M 10'3)</p>
+          <button disabled={loading} type="submit" style={{ marginTop: 10 }}>
+            Agregar mueble
+          </button>
+        </form>
+
         {/* ✅ Opción: agregar mensajero (solo nombre) - llama SP vía backend */}
         <form
           onSubmit={onCreateMensajero}
@@ -306,6 +391,25 @@ export default function AdminProfile() {
             Crear mensajero
           </button>
         </form>
+      </section>
+
+      {/* Eliminar mueble */}
+      <section style={{ border: "1px solid #eee", padding: 16, marginTop: 24 }}>
+        <h2>Eliminar mueble</h2>
+        <form onSubmit={onDeleteMueble} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <label>Mueble</label>
+          <input
+            type="number"
+            value={delMueble}
+            onChange={(e) => setDelMueble(e.target.value)}
+            placeholder="Ej: 10"
+            required
+          />
+          <button disabled={loading} type="submit">
+            Eliminar mueble
+          </button>
+        </form>
+        <p style={{ fontSize: 12, opacity: .75 }}>Los paquetes en esas ubicaciones se moverán a PENDIENTE.</p>
       </section>
 
       {/* Eliminar distrito */}

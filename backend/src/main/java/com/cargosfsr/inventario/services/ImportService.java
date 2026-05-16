@@ -120,7 +120,8 @@ public class ImportService {
             Integer colFecha         = headerIndex(hIndex, "FECHA");
             Integer colTracking      = headerIndex(hIndex, "TRACKING");
             Integer colMarchamo      = headerIndex(hIndex, "MARCHAMO");
-            Integer colDistrito      = headerIndex(hIndex, "DISTRITO", "DISTRICT", "ZONA", "UBICACION", "UBICACIÓN", "MUEBLE"); // soporta viejas cabeceras
+            Integer colDistrito      = headerIndex(hIndex, "DISTRITO", "DISTRICT", "ZONA");
+            Integer colUbicacion     = headerIndex(hIndex, "MUEBLE", "UBICACION", "UBICACIÓN", "UBICACION_CODIGO", "UBICACIÓN_CODIGO");
             Integer colResponsable   = headerIndex(hIndex, "RESPONSABLE", "RESP"); // opcional
             Integer colObservaciones = headerIndex(hIndex, "OBSERVACIONES", "OBSERVACION", "OBS", "NOTAS", "NOTA");
 
@@ -133,6 +134,7 @@ public class ImportService {
 
                 String marchamoActual = null;
                 String distritoActual = null;
+                String ubicacionActual = null;
 
                 if (colMarchamo != null) {
                     String raw = getCellStr(row.getCell(colMarchamo));
@@ -146,10 +148,17 @@ public class ImportService {
                         distritoActual = canonDistrito(raw);
                     }
                 }
+                if (colUbicacion != null) {
+                    String raw = getString(row.getCell(colUbicacion));
+                    if (raw != null && !raw.isBlank()) {
+                        ubicacionActual = raw.trim();
+                    }
+                }
 
-                if (marchamoActual == null || distritoActual == null) {
+                if (marchamoActual == null || distritoActual == null || ubicacionActual == null) {
                     Marker mk = scanRowForMarker(row);
                     if (distritoActual == null && mk.distrito != null) distritoActual = mk.distrito;
+                    if (ubicacionActual == null && mk.ubicacion != null) ubicacionActual = mk.ubicacion;
                     if (marchamoActual  == null && mk.marchamo  != null) marchamoActual  = mk.marchamo;
                 }
 
@@ -205,6 +214,7 @@ public class ImportService {
                         tracking.trim(),
                         marchamoActual,
                         distritoActual,
+                        ubicacionActual,
                         llegada,
                         responsableFila,
                         observacionesFila
@@ -225,6 +235,7 @@ public class ImportService {
         // placeholders
         long sacoPend = ensureSaco("PENDIENTE");
         long distPend = ensureDistrito(DISTRITO_PENDIENTE);
+        long ubicPend = ensureUbicacionPendiente();
 
         // Map distritos existentes (nombre canonical -> id)
         Map<String, Long> distMap = jdbc.query("SELECT id, nombre FROM distritos",
@@ -234,6 +245,20 @@ public class ImportService {
                     String canon = canonDistrito(rs.getString("nombre"));
                     if (canon == null) canon = rs.getString("nombre");
                     m.put(canon, rs.getLong("id"));
+                }
+                return m;
+            });
+
+        // Map ubicaciones existentes (exacto y normalizado)
+        Map<String, Long> ubicMap = jdbc.query("SELECT id, codigo FROM ubicacion",
+            rs -> {
+                Map<String, Long> m = new HashMap<>();
+                while (rs.next()) {
+                    String codigo = rs.getString("codigo");
+                    Long id = rs.getLong("id");
+                    m.put(codigo, id);
+                    String key = computeUbicKey(codigo);
+                    if (key != null) m.putIfAbsent(key, id);
                 }
                 return m;
             });
@@ -265,12 +290,12 @@ public class ImportService {
         // Inserta paquetes faltantes con saco/distrito PENDIENTE y estado base "DISPONIBLE"
         try {
             jdbc.update("SET @changed_by = ?", actor);
-            batchInsertIgnorePaquetes(trackings, sacoPend, distPend);
+            batchInsertIgnorePaquetes(trackings, sacoPend, distPend, ubicPend);
         } finally {
             jdbc.update("SET @changed_by = NULL");
         }
 
-        int conMarcadores = batchUpdatePaquetes(uniqRows, sacoMap, distMap, sacoPend, distPend, actor);
+        int conMarcadores = batchUpdatePaquetes(uniqRows, sacoMap, distMap, ubicMap, sacoPend, distPend, ubicPend, actor);
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("total", trackings.size());
@@ -493,15 +518,17 @@ public class ImportService {
     private static class ConsoRow {
         final String tracking;
         final String marchamo;
-        final String distrito;       // <-- antes "ubicacion"
+        final String distrito;
+        final String ubicacion;
         final Timestamp receivedAt;
         final String responsable;    // opcional (del XLSX)
         final String observaciones;
 
-        ConsoRow(String t, String m, String distrito, Timestamp ra, String responsable, String observaciones) {
+        ConsoRow(String t, String m, String distrito, String ubicacion, Timestamp ra, String responsable, String observaciones) {
             this.tracking = t != null ? t.toUpperCase(Locale.ROOT) : null;
             this.marchamo = m;
             this.distrito = distrito; // canonical o null
+            this.ubicacion = ubicacion;
             this.receivedAt = ra;
             this.responsable = responsable;
             this.observaciones = observaciones;
@@ -512,6 +539,7 @@ public class ImportService {
     private static class Marker {
         String marchamo;
         String distrito;
+        String ubicacion;
     }
 
     /** Contenedor para filas del CSV */
@@ -552,18 +580,19 @@ public class ImportService {
                 });
     }
 
-    /** Inserta paquetes faltantes, asignándoles saco/distrito PENDIENTE y estado base (DISPONIBLE) */
-    private void batchInsertIgnorePaquetes(List<String> trackings, long sacoPend, long distPend) {
+    /** Inserta paquetes faltantes, asignándoles saco/distrito/ubicación PENDIENTE y estado base */
+    private void batchInsertIgnorePaquetes(List<String> trackings, long sacoPend, long distPend, long ubicPend) {
         if (trackings.isEmpty()) return;
         List<String> uniq = trackings.stream().filter(ImportService::notBlank).distinct().toList();
         jdbc.batchUpdate(
-            "INSERT IGNORE INTO paquetes(tracking_code, saco_id, distrito_id, estado) VALUES (?,?,?, 'ENTREGADO_A_TRANSPORTISTA_LOCAL')",
+            "INSERT IGNORE INTO paquetes(tracking_code, saco_id, distrito_id, ubicacion_id, estado) VALUES (?,?,?,?, 'ENTREGADO_A_TRANSPORTISTA_LOCAL')",
             new BatchPreparedStatementSetter() {
                 @Override
                 public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
                     ps.setString(1, uniq.get(i).toUpperCase(Locale.ROOT));
                     ps.setLong(2, sacoPend);
                     ps.setLong(3, distPend);
+                    ps.setLong(4, ubicPend);
                 }
                 @Override
                 public int getBatchSize() { return uniq.size(); }
@@ -572,16 +601,17 @@ public class ImportService {
     }
 
     /**
-     * Actualiza paquete (saco, distrito y received_at).
+     * Actualiza paquete (saco, distrito, ubicación y received_at).
      * También deja rastro del actor y guarda el responsable del consolidado si viene.
      * Además, si viene "observaciones" desde el XLSX, la setea; si no viene, no toca el valor previo.
      *
-     * @return cantidad de paquetes con marchamo+distrito reales (no PENDIENTE)
+     * @return cantidad de paquetes con marchamo+distrito+ubicación reales (no PENDIENTE)
      */
     private int batchUpdatePaquetes(List<ConsoRow> rows,
                                     Map<String, Long> sacoMap,
                                     Map<String, Long> distMap,
-                                    long sacoPend, long distPend,
+                                    Map<String, Long> ubicMap,
+                                    long sacoPend, long distPend, long ubicPend,
                                     String actor) {
         if (rows.isEmpty()) return 0;
 
@@ -595,12 +625,13 @@ public class ImportService {
             for (ConsoRow r : slice) {
                 Long sId = (r.marchamo == null) ? null : sacoMap.get(r.marchamo);
                 Long dId = (r.distrito == null) ? null : distMap.get(r.distrito);
-                if (sId != null && dId != null && sId != sacoPend && dId != distPend) conMarcadores++;
+                Long uId = ubicId(ubicMap, r.ubicacion);
+                if (sId != null && dId != null && uId != null && sId != sacoPend && dId != distPend && uId != ubicPend) conMarcadores++;
             }
 
             jdbc.batchUpdate(
                 "UPDATE paquetes " +
-                "   SET saco_id=?, distrito_id=?, received_at=?, " +
+                "   SET saco_id=?, distrito_id=?, ubicacion_id=?, received_at=?, " +
                 "       cambio_en_sistema_por=?, " +
                 "       observaciones = COALESCE(?, observaciones), " +
                 "       responsable_consolidado = COALESCE(?, responsable_consolidado) " +
@@ -612,22 +643,24 @@ public class ImportService {
 
                         Long sacoId = (r.marchamo == null) ? null : sacoMap.get(r.marchamo);
                         Long distId = (r.distrito == null) ? null : distMap.get(r.distrito);
+                        Long ubicId = ubicId(ubicMap, r.ubicacion);
 
                         ps.setLong(1, sacoId == null ? sacoPend : sacoId);
                         ps.setLong(2, distId == null ? distPend : distId);
+                        ps.setLong(3, ubicId == null ? ubicPend : ubicId);
 
-                        if (r.receivedAt == null) ps.setNull(3, java.sql.Types.TIMESTAMP);
-                        else ps.setTimestamp(3, r.receivedAt);
+                        if (r.receivedAt == null) ps.setNull(4, java.sql.Types.TIMESTAMP);
+                        else ps.setTimestamp(4, r.receivedAt);
 
-                        ps.setString(4, actor);
+                        ps.setString(5, actor);
 
-                        if (r.observaciones == null || r.observaciones.isEmpty()) ps.setNull(5, java.sql.Types.VARCHAR);
-                        else ps.setString(5, clipNoTrim(r.observaciones, 500));
+                        if (r.observaciones == null || r.observaciones.isEmpty()) ps.setNull(6, java.sql.Types.VARCHAR);
+                        else ps.setString(6, clipNoTrim(r.observaciones, 500));
 
-                        if (r.responsable == null || r.responsable.isBlank()) ps.setNull(6, java.sql.Types.VARCHAR);
-                        else ps.setString(6, clipNoTrim(r.responsable, 100));
+                        if (r.responsable == null || r.responsable.isBlank()) ps.setNull(7, java.sql.Types.VARCHAR);
+                        else ps.setString(7, clipNoTrim(r.responsable, 100));
 
-                        ps.setString(7, r.tracking);
+                        ps.setString(8, r.tracking);
                     }
 
                     @Override
@@ -779,8 +812,42 @@ public class ImportService {
                 String canon = canonDistrito(raw);
                 if (canon != null) mk.distrito = canon;
             }
+
+            // ubicación/mueble: soporta códigos como M 10'3, M10-E3, MUEBLE 10 ' E3, CAJA01
+            if (mk.ubicacion == null && looksLikeUbicacion(raw)) {
+                mk.ubicacion = raw;
+            }
         }
         return mk;
+    }
+
+
+    private static boolean looksLikeUbicacion(String raw) {
+        return computeUbicKey(raw) != null;
+    }
+
+    private static String computeUbicKey(String raw) {
+        if (raw == null) return null;
+        String t = raw.trim().toUpperCase(Locale.ROOT);
+        if (t.isEmpty()) return null;
+        String compact = t.replaceAll("\\s+", "");
+        compact = compact.replace("MUEBLE", "M");
+        compact = compact.replace("ESTANTERIA", "E").replace("ESTANTERÍA", "E");
+        compact = compact.replace("'E", "'");
+        compact = compact.replace("-E", "'");
+        compact = compact.replace("E", "'");
+        if (compact.matches("^M\\d+'\\d+$")) return compact;
+        if (compact.matches("^CAJA[-_A-Z0-9]*$")) return compact;
+        if (compact.equals("PENDIENTE")) return compact;
+        return null;
+    }
+
+    private static Long ubicId(Map<String, Long> ubicMap, String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        Long direct = ubicMap.get(raw.trim());
+        if (direct != null) return direct;
+        String key = computeUbicKey(raw);
+        return key == null ? null : ubicMap.get(key);
     }
 
     // ===================== Helpers comunes ===============================
@@ -954,6 +1021,13 @@ public class ImportService {
         jdbc.update("INSERT IGNORE INTO distritos(nombre, activo) VALUES (?, 1)", nombre);
         Long id = jdbc.queryForObject("SELECT id FROM distritos WHERE nombre=? LIMIT 1", Long.class, nombre);
         if (id == null) throw new IllegalStateException("No se pudo asegurar distrito: " + nombre);
+        return id;
+    }
+
+    private long ensureUbicacionPendiente() {
+        jdbc.update("INSERT IGNORE INTO ubicacion(tipo, codigo, activo) VALUES ('MUEBLE', 'PENDIENTE', 1)");
+        Long id = jdbc.queryForObject("SELECT id FROM ubicacion WHERE codigo='PENDIENTE' LIMIT 1", Long.class);
+        if (id == null) throw new IllegalStateException("No se pudo asegurar ubicación PENDIENTE");
         return id;
     }
 

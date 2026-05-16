@@ -129,8 +129,12 @@ public class DiagController {
             "sp_paquetes_devolucion",
             "sp_paquetes_por_fecha",
             "sp_paquetes_por_distrito",
+            "sp_paquetes_por_ubicacion",
             "sp_tracking_distrito",
-            "sp_set_marchamo_distrito"
+            "sp_tracking_ubicacion",
+            "sp_set_marchamo_distrito",
+            "sp_set_marchamo_ubicacion",
+            "sp_agregar_mueble"
         );
         for (String n : names) {
             Map<String, Object> row = null;

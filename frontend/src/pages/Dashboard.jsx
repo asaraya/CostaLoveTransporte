@@ -64,6 +64,7 @@ export default function Dashboard() {
 
   const [summary, setSummary] = useState(null)
   const [topDistritos, setTopDistritos] = useState([])
+  const [topUbicaciones, setTopUbicaciones] = useState([])
   const [topTransportistas, setTopTransportistas] = useState([])
   const [ultimosMov, setUltimosMov] = useState([])
   const [loading, setLoading] = useState(false)
@@ -71,6 +72,14 @@ export default function Dashboard() {
   const [distModal, setDistModal] = useState({
     open: false,
     distrito: '',
+    rows: [],
+    loading: false,
+    error: null,
+  })
+
+  const [ubicModal, setUbicModal] = useState({
+    open: false,
+    ubicacion: '',
     rows: [],
     loading: false,
     error: null,
@@ -106,8 +115,6 @@ export default function Dashboard() {
           distrito:
             r?.distrito ??
             r?.distrito_nombre ??
-            r?.ubicacion ??
-            r?.ubicacion_codigo ??
             r?.nombre ??
             '',
           cantidad: Number(r?.cantidad ?? r?.total ?? r?.count ?? 0) || 0,
@@ -116,6 +123,29 @@ export default function Dashboard() {
 
       normalized.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0))
       setTopDistritos(normalized)
+    } catch (e) {
+      alert(e?.response?.data?.message || e?.message || 'Error')
+    }
+  }
+
+  const cargarTopUbicaciones = async () => {
+    try {
+      const { data } = await api.get('/dashboard/top-ubicaciones', { params: { limit: 100000 } })
+      const arr = Array.isArray(data) ? data : []
+      const normalized = arr
+        .map((r) => ({
+          ubicacion:
+            r?.ubicacion ??
+            r?.ubicacion_codigo ??
+            r?.codigo ??
+            r?.nombre ??
+            '',
+          cantidad: Number(r?.cantidad ?? r?.total ?? r?.count ?? 0) || 0,
+        }))
+        .filter((x) => x.ubicacion)
+
+      normalized.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0) || String(a.ubicacion).localeCompare(String(b.ubicacion)))
+      setTopUbicaciones(normalized)
     } catch (e) {
       alert(e?.response?.data?.message || e?.message || 'Error')
     }
@@ -159,9 +189,10 @@ export default function Dashboard() {
   const cargarTodo = async () => {
     setLoading(true)
     try {
-      const [s, u, t, m] = await Promise.all([
+      const [s, u, ub, t, m] = await Promise.all([
         api.get('/dashboard/summary', { params: { fecha } }),
         api.get('/dashboard/top-distritos', { params: { limit: 100000 } }),
+        api.get('/dashboard/top-ubicaciones', { params: { limit: 100000 } }),
         api.get('/dashboard/top-transportistas', { params: { limit: 100000 } }),
         api.get('/dashboard/ultimos-movimientos', { params: { fecha, limit: 100000 } }),
       ])
@@ -184,6 +215,14 @@ export default function Dashboard() {
 
       normalized.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0))
       setTopDistritos(normalized)
+
+      const ubArr = Array.isArray(ub.data) ? ub.data : []
+      const ubNorm = ubArr.map(r => ({
+        ubicacion: r?.ubicacion ?? r?.ubicacion_codigo ?? r?.codigo ?? r?.nombre ?? '',
+        cantidad: Number(r?.cantidad ?? r?.total ?? r?.count ?? 0) || 0,
+      })).filter(x => x.ubicacion)
+      ubNorm.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0) || String(a.ubicacion).localeCompare(String(b.ubicacion)))
+      setTopUbicaciones(ubNorm)
 
       const tArr = Array.isArray(t.data) ? t.data : []
       const tNorm = tArr.map(x => ({
@@ -332,6 +371,7 @@ export default function Dashboard() {
   }, [mesResumen])
 
   useEffect(() => { cargarTopDistritos() }, [])
+  useEffect(() => { cargarTopUbicaciones() }, [])
   useEffect(() => { cargarFecha() }, [fecha])
 
   const openDistritoModal = async (distrito) => {
@@ -359,6 +399,31 @@ export default function Dashboard() {
 
   const closeDistritoModal = () => setDistModal(prev => ({ ...prev, open: false }))
 
+  const openUbicacionModal = async (ubicacion) => {
+    setUbicModal({ open: true, ubicacion, rows: [], loading: true, error: null })
+    try {
+      const { data } = await api.get(`/busqueda/ubicacion/${encodeURIComponent(ubicacion)}`, {
+        params: {
+          estado: 'ENTREGADO_A_TRANSPORTISTA_LOCAL,NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE,ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'
+        }
+      })
+      const arr = Array.isArray(data) ? data : []
+      const rows = arr
+        .filter(r => ESTADOS_INVENTARIO.has(String(r?.estado ?? '').toUpperCase()))
+        .sort((a, b) => new Date(b?.received_at ?? 0).getTime() - new Date(a?.received_at ?? 0).getTime())
+
+      setUbicModal(prev => ({ ...prev, rows, loading: false }))
+    } catch (e) {
+      setUbicModal(prev => ({
+        ...prev,
+        loading: false,
+        error: e?.response?.data?.message || e?.message || 'Error cargando paquetes'
+      }))
+    }
+  }
+
+  const closeUbicacionModal = () => setUbicModal(prev => ({ ...prev, open: false }))
+
   const openTransportistaModal = async (mensajeroId, transportista) => {
     setTransModal({ open: true, mensajeroId, transportista, rows: [], loading: true, error: null })
     try {
@@ -383,12 +448,13 @@ export default function Dashboard() {
     const onKey = (e) => {
       if (e.key === 'Escape') {
         if (distModal.open) closeDistritoModal()
+        if (ubicModal.open) closeUbicacionModal()
         if (transModal.open) closeTransportistaModal()
       }
     }
-    if (distModal.open || transModal.open) window.addEventListener('keydown', onKey)
+    if (distModal.open || ubicModal.open || transModal.open) window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [distModal.open, transModal.open])
+  }, [distModal.open, ubicModal.open, transModal.open])
 
   function movFechaOficial(r) {
     if (!r) return null
@@ -516,6 +582,33 @@ export default function Dashboard() {
                 </tr>
               ))}
               {!topDistritos.length && (
+                <tr><td colSpan={2} style={{ textAlign: 'center', opacity: .7 }}>Sin datos</td></tr>
+              )}
+            </tbody>
+          </table>
+
+          <h4 style={{ marginTop: 16 }}>Paquetes por ubicación / mueble</h4>
+          <table border="1" cellPadding="6" width="100%">
+            <thead><tr><th>Ubicación</th><th>Cantidad</th></tr></thead>
+            <tbody>
+              {topUbicaciones.map((r, i) => (
+                <tr key={i}>
+                  <td>
+                    <button
+                      onClick={() => openUbicacionModal(r.ubicacion)}
+                      style={{
+                        background: 'none', border: 'none', color: '#0b66c3',
+                        textDecoration: 'underline', padding: 0, cursor: 'pointer'
+                      }}
+                      title="Ver paquetes en esta ubicación (en inventario)"
+                    >
+                      {r.ubicacion}
+                    </button>
+                  </td>
+                  <td>{r.cantidad}</td>
+                </tr>
+              ))}
+              {!topUbicaciones.length && (
                 <tr><td colSpan={2} style={{ textAlign: 'center', opacity: .7 }}>Sin datos</td></tr>
               )}
             </tbody>
@@ -683,7 +776,7 @@ export default function Dashboard() {
           <table border="1" cellPadding="6" width="100%">
             <thead>
               <tr>
-                <th>Tracking</th><th>Marchamo</th><th>Distrito</th>
+                <th>Tracking</th><th>Marchamo</th><th>Distrito</th><th>Ubicación</th>
                 <th>De</th><th>A</th><th>Fecha</th><th>Motivo</th><th>Por</th>
               </tr>
             </thead>
@@ -693,6 +786,7 @@ export default function Dashboard() {
                   <td>{r.tracking_code}</td>
                   <td>{r.marchamo}</td>
                   <td>{r.distrito_nombre ?? '-'}</td>
+                  <td>{r.ubicacion_codigo ?? '-'}</td>
                   <td>{labelEstado(r.estado_from ?? '-')}</td>
                   <td>{labelEstado(r.estado_to ?? '-')}</td>
                   <td>{fmtDT(movFechaOficial(r))}</td>
@@ -701,7 +795,7 @@ export default function Dashboard() {
                 </tr>
               ))}
               {!ultimosMov.length && (
-                <tr><td colSpan={8} style={{ textAlign: 'center', opacity: .7 }}>Sin movimientos para la fecha</td></tr>
+                <tr><td colSpan={9} style={{ textAlign: 'center', opacity: .7 }}>Sin movimientos para la fecha</td></tr>
               )}
             </tbody>
           </table>
@@ -755,6 +849,65 @@ export default function Dashboard() {
                         </tr>
                       )) : (
                         <tr><td colSpan={5} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>Sin resultados</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {ubicModal.open && (
+        <div
+          onClick={closeUbicacionModal}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+          }}
+        >
+          <div onClick={e => e.stopPropagation()} style={blueCard}>
+            <button onClick={closeUbicacionModal} aria-label="Cerrar" title="Cerrar" style={closeBtn}>×</button>
+
+            <h4 style={{ margin: '0 0 10px', color: '#fff' }}>
+              Paquetes en ubicación: <span style={{ fontWeight: 800 }}>{ubicModal.ubicacion}</span>
+              <span style={pill}>EN INVENTARIO</span>
+            </h4>
+
+            {ubicModal.loading && <div style={{ padding: 8, color: '#e8f0ff' }}>Cargando paquetes…</div>}
+            {ubicModal.error && <div style={{ padding: 8, color: '#ffdde0' }}>{ubicModal.error}</div>}
+
+            {!ubicModal.loading && !ubicModal.error && (
+              <>
+                <div style={{ marginBottom: 8, opacity: .9, color: '#e8f0ff' }}>
+                  Total: {ubicModal.rows.length}
+                </div>
+
+                <div style={{ overflow: 'auto', maxHeight: '65vh', border: '1px solid rgba(255,255,255,.35)', borderRadius: 8, background: '#fff' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: '#f3f7ff' }}>
+                        <th style={th}>Tracking</th>
+                        <th style={th}>Marchamo</th>
+                        <th style={th}>Distrito</th>
+                        <th style={th}>Ubicación</th>
+                        <th style={th}>Estado</th>
+                        <th style={th}>Recibido</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ubicModal.rows.length ? ubicModal.rows.map((r, idx) => (
+                        <tr key={r.id ?? r.tracking_code ?? idx} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+                          <td style={td}>{r.tracking_code}</td>
+                          <td style={td}>{r.marchamo}</td>
+                          <td style={td}>{r.distrito_nombre ?? '-'}</td>
+                          <td style={td}>{r.ubicacion_codigo ?? '-'}</td>
+                          <td style={td}>{labelEstado(r.estado)}</td>
+                          <td style={td}>{fmtDT(r.received_at)}</td>
+                        </tr>
+                      )) : (
+                        <tr><td colSpan={6} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>Sin resultados</td></tr>
                       )}
                     </tbody>
                   </table>

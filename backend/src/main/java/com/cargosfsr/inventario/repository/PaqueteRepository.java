@@ -21,6 +21,9 @@ public interface PaqueteRepository extends JpaRepository<Paquete, Long> {
 
     boolean existsByTrackingCode(String trackingCode);
 
+    @EntityGraph(attributePaths = {"saco", "distrito", "ubicacion"})
+    Optional<Paquete> findWithSacoDistritoAndUbicacionById(Long id);
+
     @EntityGraph(attributePaths = {"saco", "distrito"})
     Optional<Paquete> findWithSacoAndDistritoById(Long id);
 
@@ -58,6 +61,7 @@ public interface PaqueteRepository extends JpaRepository<Paquete, Long> {
         String getRecipientAddress();
         String getMarchamo();
         String getDistritoNombre();
+        String getUbicacionCodigo();
     }
 
     @Query("""
@@ -73,10 +77,12 @@ public interface PaqueteRepository extends JpaRepository<Paquete, Long> {
                p.recipientPhone as recipientPhone,
                p.recipientAddress as recipientAddress,
                s.marchamo as marchamo,
-               d.nombre as distritoNombre
+               d.nombre as distritoNombre,
+               u.codigo as ubicacionCodigo
         from Paquete p
           join p.saco s
           join p.distrito d
+          join p.ubicacion u
         where p.estado = :estado
           and (:subtipo is null or p.devolucionSubtipo = :subtipo)
           and (:desde is null or p.returnedAt >= :desde)

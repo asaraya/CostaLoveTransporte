@@ -30,9 +30,11 @@ import org.springframework.web.multipart.MultipartFile;
 import com.cargosfsr.inventario.model.Distrito;
 import com.cargosfsr.inventario.model.Paquete;
 import com.cargosfsr.inventario.model.Saco;
+import com.cargosfsr.inventario.model.Ubicacion;
 import com.cargosfsr.inventario.repository.DistritoRepository;
 import com.cargosfsr.inventario.repository.PaqueteRepository;
 import com.cargosfsr.inventario.repository.SacoRepository;
+import com.cargosfsr.inventario.repository.UbicacionRepository;
 
 @Service
 public class MarchamoUpdateService {
@@ -40,11 +42,13 @@ public class MarchamoUpdateService {
     private final PaqueteRepository paquetes;
     private final SacoRepository sacos;
     private final DistritoRepository distritos;
+    private final UbicacionRepository ubicaciones;
 
-    public MarchamoUpdateService(PaqueteRepository paquetes, SacoRepository sacos, DistritoRepository distritos) {
+    public MarchamoUpdateService(PaqueteRepository paquetes, SacoRepository sacos, DistritoRepository distritos, UbicacionRepository ubicaciones) {
         this.paquetes = paquetes;
         this.sacos = sacos;
         this.distritos = distritos;
+        this.ubicaciones = ubicaciones;
     }
 
     private static final Pattern TRACKING_P = Pattern.compile("^[A-Z0-9]{2,}$");
@@ -56,13 +60,18 @@ public class MarchamoUpdateService {
             Pattern.CASE_INSENSITIVE
     );
 
+    private static final Pattern UBIC_MUEBLE_P = Pattern.compile(
+            "^MUEBLE\\s*\\d+\\s*'?\\s*E\\d+$|^MUEBLE\\d+'E\\d+$|^M\\s*\\d+\\s*[-']\\s*E?\\s*\\d+$|^M\\s*\\d+\\s*'\\s*\\d+$|^CAJA\\s*[-]?\\s*\\d+$",
+            Pattern.CASE_INSENSITIVE
+    );
+
     @Transactional
     public Map<String,Object> actualizarMarchamos(MultipartFile file, boolean createMissingSacos, boolean updateDistrito) throws IOException {
         // 1) Parsear archivo (xlsx o csv): tracking -> (marchamo, distrito opcional)
         Map<String,Asignacion> map = esXlsx(file) ? parseXlsx(file) : parseCsvGrupos(file);
 
         // 2) Aplicar en BD
-        int asignados = 0, creadosSacos = 0, paquetesNoEncontrados = 0, errores = 0, distritoNoExiste = 0;
+        int asignados = 0, creadosSacos = 0, paquetesNoEncontrados = 0, errores = 0, distritoNoExiste = 0, ubicNoExiste = 0;
         List<Map<String,Object>> detalle = new ArrayList<>();
 
         for (var e : map.entrySet()) {
@@ -91,6 +100,18 @@ public class MarchamoUpdateService {
                         } else {
                             p.setDistrito(d);
                         }
+                    }
+                }
+
+                // Ubicación / mueble (opcional)
+                if (updateDistrito && a.ubicacionCodigo != null) {
+                    String cod = canonicalUbicacion(a.ubicacionCodigo);
+                    Ubicacion u = ubicaciones.findByCodigo(cod).orElse(null);
+                    if (u == null) {
+                        ubicNoExiste++;
+                        detalle.add(Map.of("tracking", tracking, "warning", "Ubicación no existe: " + cod));
+                    } else {
+                        p.setUbicacion(u);
                     }
                 }
 
@@ -129,6 +150,7 @@ public class MarchamoUpdateService {
             "sacos_creados", creadosSacos,
             "paquetes_no_encontrados", paquetesNoEncontrados,
             "distritos_invalidos_o_inexistentes", distritoNoExiste,
+            "ubicaciones_inexistentes", ubicNoExiste,
             "errores", errores,
             "detalle", detalle
         );
@@ -147,6 +169,7 @@ public class MarchamoUpdateService {
                 Sheet sh = wb.getSheetAt(si);
                 String currentMarchamo = null;
                 String currentDistrito = null;
+                String currentUbic = null;
 
                 for (Row row : sh) {
                     for (Cell cell : row) {
@@ -161,8 +184,12 @@ public class MarchamoUpdateService {
                             currentDistrito = txt;
                             continue;
                         }
+                        if (UBIC_MUEBLE_P.matcher(txt).matches()) {
+                            currentUbic = txt;
+                            continue;
+                        }
                         if (TRACKING_P.matcher(txt).matches()) {
-                            out.put(txt.toUpperCase(Locale.ROOT), new Asignacion(currentMarchamo, currentDistrito));
+                            out.put(txt.toUpperCase(Locale.ROOT), new Asignacion(currentMarchamo, currentDistrito, currentUbic));
                         }
                     }
                 }
@@ -181,6 +208,7 @@ public class MarchamoUpdateService {
 
             String currentMarchamo = null;
             String currentDistrito = null;
+            String currentUbic = null;
 
             for (CSVRecord r : parser) {
                 for (String raw : r) {
@@ -195,8 +223,12 @@ public class MarchamoUpdateService {
                         currentDistrito = txt;
                         continue;
                     }
+                    if (UBIC_MUEBLE_P.matcher(txt).matches()) {
+                        currentUbic = txt;
+                        continue;
+                    }
                     if (TRACKING_P.matcher(txt).matches()) {
-                        out.put(txt.toUpperCase(Locale.ROOT), new Asignacion(currentMarchamo, currentDistrito));
+                        out.put(txt.toUpperCase(Locale.ROOT), new Asignacion(currentMarchamo, currentDistrito, currentUbic));
                     }
                 }
             }
@@ -247,5 +279,24 @@ public class MarchamoUpdateService {
         };
     }
 
-    private record Asignacion(String marchamo, String distritoNombre) {}
+    private static String canonicalUbicacion(String raw) {
+        if (raw == null) return null;
+        String t = raw.trim().replaceAll("\\s+", " ").toUpperCase(Locale.ROOT);
+
+        if (t.matches("^M\\s*\\d+\\s*'\\s*\\d+$")) {
+            java.util.regex.Matcher m = Pattern.compile("^M\\s*(\\d+)\\s*'\\s*(\\d+)$").matcher(t);
+            if (m.find()) return "M " + m.group(1) + "'" + m.group(2);
+        }
+        if (t.matches("^M\\s*\\d+\\s*-\\s*E?\\s*\\d+$")) {
+            java.util.regex.Matcher m = Pattern.compile("^M\\s*(\\d+)\\s*-\\s*E?\\s*(\\d+)$").matcher(t);
+            if (m.find()) return "M " + m.group(1) + "'" + m.group(2);
+        }
+        if (t.matches("^MUEBLE\\s*\\d+\\s*'?\\s*E?\\s*\\d+$")) {
+            java.util.regex.Matcher m = Pattern.compile("^MUEBLE\\s*(\\d+)\\s*'?\\s*E?\\s*(\\d+)$").matcher(t);
+            if (m.find()) return "M " + m.group(1) + "'" + m.group(2);
+        }
+        return raw.trim();
+    }
+
+    private record Asignacion(String marchamo, String distritoNombre, String ubicacionCodigo) {}
 }

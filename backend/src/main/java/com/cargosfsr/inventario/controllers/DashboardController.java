@@ -262,6 +262,32 @@ public class DashboardController {
     return out;
   }
 
+  @GetMapping("/top-ubicaciones")
+  public List<Map<String, Object>> topUbicaciones(@RequestParam(value = "limit", defaultValue = "10") int limit) {
+    String sql =
+        """
+        SELECT v.ubicacion_codigo AS ubicacion, COUNT(*) AS cantidad
+        FROM vw_paquete_resumen v
+        WHERE v.estado IN (
+          'ENTREGADO_A_TRANSPORTISTA_LOCAL',
+          'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
+          'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'
+        )
+        GROUP BY v.ubicacion_codigo
+        ORDER BY cantidad DESC, ubicacion ASC
+        LIMIT ?
+        """;
+    return jdbc.query(
+        sql,
+        (rs, i) -> {
+          Map<String, Object> m = new LinkedHashMap<>();
+          m.put("ubicacion", rs.getString("ubicacion"));
+          m.put("cantidad", rs.getInt("cantidad"));
+          return m;
+        },
+        limit);
+  }
+
   @GetMapping("/top-distritos")
   public List<Map<String, Object>> topDistritos(@RequestParam(value = "limit", defaultValue = "10") int limit) {
     String sql =
@@ -522,7 +548,7 @@ public class DashboardController {
 
     String base =
         """
-        SELECT h.id AS hist_id, p.tracking_code, v.marchamo, v.distrito_nombre,
+        SELECT h.id AS hist_id, p.tracking_code, v.marchamo, v.distrito_nombre, v.ubicacion_codigo,
                h.estado_from, h.estado_to, h.changed_at, p.received_at, p.delivered_at, p.returned_at,
                h.motivo, h.changed_by
         FROM paquete_estado_historial h
@@ -542,6 +568,7 @@ public class DashboardController {
             m.put("tracking_code", rs.getString("tracking_code"));
             m.put("marchamo", rs.getString("marchamo"));
             m.put("distrito_nombre", rs.getString("distrito_nombre"));
+            m.put("ubicacion_codigo", rs.getString("ubicacion_codigo"));
             m.put("estado_from", rs.getString("estado_from"));
             m.put("estado_to", rs.getString("estado_to"));
             m.put("changed_at", rs.getTimestamp("changed_at"));
@@ -586,6 +613,7 @@ public class DashboardController {
           m.put("tracking_code", rs.getString("tracking_code"));
           m.put("marchamo", rs.getString("marchamo"));
           m.put("distrito_nombre", rs.getString("distrito_nombre"));
+          m.put("ubicacion_codigo", rs.getString("ubicacion_codigo"));
           m.put("estado_from", rs.getString("estado_from"));
           m.put("estado_to", rs.getString("estado_to"));
           m.put("changed_at", rs.getTimestamp("changed_at"));

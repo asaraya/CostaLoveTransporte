@@ -15,11 +15,13 @@ import com.cargosfsr.inventario.auth.CurrentUser;
 import com.cargosfsr.inventario.model.Distrito;
 import com.cargosfsr.inventario.model.Paquete;
 import com.cargosfsr.inventario.model.Saco;
+import com.cargosfsr.inventario.model.Ubicacion;
 import com.cargosfsr.inventario.model.enums.PaqueteEstado;
 import com.cargosfsr.inventario.repository.DistritoRepository;
 import com.cargosfsr.inventario.repository.PaqueteEstadoHistorialRepository;
 import com.cargosfsr.inventario.repository.PaqueteRepository;
 import com.cargosfsr.inventario.repository.SacoRepository;
+import com.cargosfsr.inventario.repository.UbicacionRepository;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -34,6 +36,7 @@ public class RegistroService {
     private final PaqueteRepository paquetes;
     private final SacoRepository sacos;
     private final DistritoRepository distritos;
+    private final UbicacionRepository ubicaciones;
     private final PaqueteEstadoHistorialRepository historial;
     private final CurrentUser currentUser;
 
@@ -43,11 +46,13 @@ public class RegistroService {
     public RegistroService(PaqueteRepository paquetes,
                            SacoRepository sacos,
                            DistritoRepository distritos,
+                           UbicacionRepository ubicaciones,
                            PaqueteEstadoHistorialRepository historial,
                            CurrentUser currentUser) {
         this.paquetes = paquetes;
         this.sacos = sacos;
         this.distritos = distritos;
+        this.ubicaciones = ubicaciones;
         this.historial = historial;
         this.currentUser = currentUser;
     }
@@ -74,15 +79,18 @@ public class RegistroService {
     public Map<String, Object> preregistrar(String tracking,
                                             String marchamo,
                                             String distritoNombre,
+                                            String ubicacionCodigo,
                                             Instant receivedAt) {
 
         require(StringUtils.hasText(tracking), "tracking requerido");
         require(StringUtils.hasText(marchamo), "marchamo requerido");
         require(StringUtils.hasText(distritoNombre), "distrito requerido");
+        require(StringUtils.hasText(ubicacionCodigo), "ubicacionCodigo requerido");
 
         final String t = normalizeTracking(tracking);
         final String m = marchamo.trim();
         final String dname = distritoNombre.trim();
+        final String ucode = ubicacionCodigo.trim();
 
         require(TRACKING_PATTERN.matcher(t).matches(),
                 "tracking inválido: debe iniciar con CR, HZCR o LM seguido de caracteres alfanuméricos");
@@ -101,11 +109,17 @@ public class RegistroService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "El distrito no existe: " + dname));
 
+        // Validar ubicación/mueble existente
+        Ubicacion u = ubicaciones.findByCodigo(ucode)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "La ubicación no existe: " + ucode));
+
         Instant now = Instant.now();
         Paquete p = new Paquete();
         p.setTrackingCode(t);
         p.setSaco(s);
         p.setDistrito(d);
+        p.setUbicacion(u);
 
         // ✅ REGLA NUEVA: al hacer recepción, el estado por defecto es ENTREGADO_A_TRANSPORTISTA_LOCAL
         p.setEstado(PaqueteEstado.ENTREGADO_A_TRANSPORTISTA_LOCAL);
@@ -145,6 +159,8 @@ public class RegistroService {
         out.put("marchamo", s.getMarchamo());
         out.put("distrito_id", d.getId());
         out.put("distrito_nombre", d.getNombre());
+        out.put("ubicacion_id", u.getId());
+        out.put("ubicacion_codigo", u.getCodigo());
         return out;
     }
 
@@ -235,10 +251,9 @@ public class RegistroService {
     }
 
     @Transactional
-    public Saco crearSaco(String marchamo, String defaultDistritoNombre) {
-        // Mantiene compatibilidad con el controller:
-        // - Crea el saco (idempotente)
-        // - Si mandan distrito por el body, al menos valida que exista
+    public Saco crearSaco(String marchamo, String defaultDistritoNombre, String defaultUbicacionCodigo) {
+        // Crea el saco de forma idempotente.
+        // El distrito se valida por compatibilidad con el flujo actual; la ubicación queda como default del saco.
         Saco s = crearSaco(marchamo);
 
         if (defaultDistritoNombre != null && !defaultDistritoNombre.isBlank()) {
@@ -247,7 +262,20 @@ public class RegistroService {
                 .orElseThrow(() -> new IllegalArgumentException("El distrito no existe: " + d));
         }
 
+        if (defaultUbicacionCodigo != null && !defaultUbicacionCodigo.isBlank()) {
+            String ucode = defaultUbicacionCodigo.trim();
+            Ubicacion u = ubicaciones.findByCodigo(ucode)
+                .orElseThrow(() -> new IllegalArgumentException("Ubicación no existe: " + ucode));
+            s.setDefaultUbicacion(u);
+            return sacos.save(s);
+        }
+
         return s;
+    }
+
+    @Transactional
+    public Saco crearSaco(String marchamo, String defaultDistritoNombre) {
+        return crearSaco(marchamo, defaultDistritoNombre, null);
     }
 
 }

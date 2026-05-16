@@ -259,6 +259,12 @@ public class ConsultasService {
                 v.marchamo,
                 v.distrito_id,
                 v.distrito_nombre,
+                v.ubicacion_id,
+                v.ubicacion_codigo,
+                v.ubicacion_tipo,
+                v.mueble,
+                v.estanteria,
+                v.caja,
                 (
                   SELECT h.changed_by
                     FROM paquete_estado_historial h
@@ -317,6 +323,12 @@ public class ConsultasService {
     public long countPorDistritoNombre(String nombre) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM vw_paquete_resumen WHERE distrito_nombre = ?",
                 Long.class, nombre);
+    }
+
+    @Cacheable(cacheNames = "inventario", key = "'cnt_ubicacion:'+ #codigo")
+    public long countPorUbicacionCodigo(String codigo) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM vw_paquete_resumen WHERE ubicacion_codigo = ?",
+                Long.class, codigo);
     }
 
     @Cacheable(cacheNames = "busquedas", key = "'cnt_tracking:'+ #q +':'+ #like")
@@ -387,6 +399,11 @@ public class ConsultasService {
     public List<Map<String, Object>> porDistritoNombre(String nombre) {
         // SP: (p_distrito_nombre, p_tipo_fecha, p_desde, p_hasta, p_estado)
         return jdbc.queryForList("CALL sp_paquetes_por_distrito(?, ?, ?, ?, ?)", nombre, null, null, null, null);
+    }
+
+    @Cacheable(cacheNames = "inventario", key = "'ubic:'+ #codigo")
+    public List<Map<String, Object>> porUbicacionCodigo(String codigo) {
+        return jdbc.queryForList("CALL sp_paquetes_por_ubicacion(?, ?, ?, ?, ?)", codigo, null, null, null, null);
     }
 
     @Cacheable(cacheNames = "busquedas", key = "'nom_exact_like:'+ #nombre +':'+ #like")
@@ -527,6 +544,45 @@ public class ConsultasService {
         // Orden razonable (si viene id): DESC
         merged.sort((a, b) -> Long.compare(asLong(b.get("id")), asLong(a.get("id"))));
 
+        return merged;
+    }
+
+    @Cacheable(cacheNames = "inventario",
+            key = "'ubic_filt:'+ #codigo + ':' + #tipoFecha + ':' + #desde + ':' + #hasta + ':' + #estado")
+    public List<Map<String, Object>> porUbicacion(String codigo,
+                                                String tipoFecha,
+                                                Instant desde,
+                                                Instant hasta,
+                                                String estado) {
+        Timestamp pDesde = ts(desde);
+        Timestamp pHasta = ts(hasta);
+        String pTipo = (tipoFecha == null || tipoFecha.isBlank())
+                ? "CAMBIO"
+                : tipoFecha.trim().toUpperCase(Locale.ROOT);
+        List<String> estados = parseEstados(estado);
+
+        if (estados == null || estados.isEmpty()) {
+            return jdbc.queryForList("CALL sp_paquetes_por_ubicacion(?, ?, ?, ?, ?)",
+                    codigo, pTipo, pDesde, pHasta, null);
+        }
+        if (estados.size() == 1) {
+            return jdbc.queryForList("CALL sp_paquetes_por_ubicacion(?, ?, ?, ?, ?)",
+                    codigo, pTipo, pDesde, pHasta, estados.get(0));
+        }
+
+        LinkedHashMap<Object, Map<String, Object>> uniq = new LinkedHashMap<>();
+        for (String st : estados) {
+            List<Map<String, Object>> part = jdbc.queryForList("CALL sp_paquetes_por_ubicacion(?, ?, ?, ?, ?)",
+                    codigo, pTipo, pDesde, pHasta, st);
+            for (Map<String, Object> row : part) {
+                Object key = row.get("id");
+                if (key == null) key = row.get("tracking_code");
+                if (key == null) key = row;
+                uniq.putIfAbsent(key, row);
+            }
+        }
+        List<Map<String, Object>> merged = new ArrayList<>(uniq.values());
+        merged.sort((a, b) -> Long.compare(asLong(b.get("id")), asLong(a.get("id"))));
         return merged;
     }
 
