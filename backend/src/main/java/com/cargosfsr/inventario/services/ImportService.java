@@ -101,6 +101,10 @@ public class ImportService {
         long t0 = System.currentTimeMillis();
 
         List<ConsoRow> rows = new ArrayList<>(4096);
+        int filasConFechaDefault = 0;
+        int filasConLugarArrastrado = 0;
+        int rechazados = 0;
+        List<String> errores = new ArrayList<>();
 
         try (var is = file.getInputStream(); Workbook wb = WorkbookFactory.create(is)) {
             Sheet sh = wb.getSheet("CONSOLIDADO OFICIAL");
@@ -112,21 +116,25 @@ public class ImportService {
                 for (int c = header.getFirstCellNum(); c < header.getLastCellNum(); c++) {
                     String name = getString(header.getCell(c));
                     if (name != null) {
-                        hIndex.put(name.trim().toUpperCase(Locale.ROOT), c);
+                        hIndex.put(normalizeHeader(name), c);
                     }
                 }
             }
 
+            Integer colId            = headerIndex(hIndex, "ID");
             Integer colFecha         = headerIndex(hIndex, "FECHA");
             Integer colTracking      = headerIndex(hIndex, "TRACKING");
+            Integer colTrackingId    = headerIndex(hIndex, "TRACKING ID", "TRACKING_ID", "TRACKINGID");
             Integer colMarchamo      = headerIndex(hIndex, "MARCHAMO");
-            Integer colDistrito      = headerIndex(hIndex, "DISTRITO", "DISTRICT", "ZONA");
+            Integer colDistrito      = headerIndex(hIndex, "LUGAR", "DISTRITO", "DISTRICT", "ZONA");
             Integer colUbicacion     = headerIndex(hIndex, "MUEBLE", "UBICACION", "UBICACIÓN", "UBICACION_CODIGO", "UBICACIÓN_CODIGO");
             Integer colResponsable   = headerIndex(hIndex, "RESPONSABLE", "RESP"); // opcional
             Integer colObservaciones = headerIndex(hIndex, "OBSERVACIONES", "OBSERVACION", "OBS", "NOTAS", "NOTA");
 
             if (colFecha == null) colFecha = 0;
             if (colTracking == null) colTracking = detectTrackingColumn(sh);
+
+            String ultimoLugarValido = null;
 
             for (int r = sh.getFirstRowNum() + 1; r <= sh.getLastRowNum(); r++) {
                 Row row = sh.getRow(r);
@@ -145,7 +153,13 @@ public class ImportService {
                 if (colDistrito != null) {
                     String raw = getString(row.getCell(colDistrito));
                     if (raw != null && !raw.isBlank()) {
-                        distritoActual = canonDistrito(raw);
+                        String canon = canonDistrito(raw);
+                        distritoActual = canon != null ? canon : raw.trim().replaceAll("\\s+", " ");
+                        ultimoLugarValido = distritoActual;
+                    } else if (ultimoLugarValido != null) {
+                        // El formato Inventario_TR suele traer Lugar solo en la primera fila del bloque.
+                        distritoActual = ultimoLugarValido;
+                        filasConLugarArrastrado++;
                     }
                 }
                 if (colUbicacion != null) {
@@ -176,12 +190,6 @@ public class ImportService {
                     if (obs != null) observacionesFila = obs;
                 }
 
-                Timestamp llegada = null;
-                try {
-                    Date f = parseFecha(row.getCell(colFecha));
-                    if (f != null) llegada = new Timestamp(f.getTime());
-                } catch (Exception ignore) {}
-
                 List<String> trackings = new ArrayList<>();
                 if (colTracking != null) {
                     String cellVal = getCellStr(row.getCell(colTracking));
@@ -207,6 +215,34 @@ public class ImportService {
                     }
                 }
                 // ======================================================================================
+
+                // Tracking id es obligatorio en el nuevo formato, pero no se guarda en BD porque el
+                // esquema actual solo tiene tracking_code. Se valida para no importar filas incompletas.
+                if (colTrackingId != null) {
+                    String trackingIdRaw = getCellStr(row.getCell(colTrackingId));
+                    if (findAllTrackings(trackingIdRaw).isEmpty()) {
+                        rechazados++;
+                        errores.add("Fila " + (r + 1) + ": Tracking id obligatorio o inválido");
+                        continue;
+                    }
+                }
+
+                if (distritoActual == null || distritoActual.isBlank()) {
+                    rechazados++;
+                    errores.add("Fila " + (r + 1) + ": Lugar/Distrito obligatorio o inválido");
+                    continue;
+                }
+
+                Timestamp llegada = null;
+                try {
+                    Date f = parseFecha(row.getCell(colFecha));
+                    if (f != null) llegada = new Timestamp(f.getTime());
+                } catch (Exception ignore) {}
+
+                if (llegada == null) {
+                    llegada = new Timestamp(System.currentTimeMillis());
+                    filasConFechaDefault++;
+                }
 
                 for (String tracking : trackings) {
                     if (tracking == null || tracking.isBlank()) continue;
@@ -237,14 +273,20 @@ public class ImportService {
         long distPend = ensureDistrito(DISTRITO_PENDIENTE);
         long ubicPend = ensureUbicacionPendiente();
 
-        // Map distritos existentes (nombre canonical -> id)
+        // Map distritos existentes (nombre canonical/exacto/normalizado -> id)
         Map<String, Long> distMap = jdbc.query("SELECT id, nombre FROM distritos",
             rs -> {
                 Map<String, Long> m = new HashMap<>();
                 while (rs.next()) {
-                    String canon = canonDistrito(rs.getString("nombre"));
-                    if (canon == null) canon = rs.getString("nombre");
-                    m.put(canon, rs.getLong("id"));
+                    String nombre = rs.getString("nombre");
+                    Long id = rs.getLong("id");
+                    String canon = canonDistrito(nombre);
+                    if (canon == null) canon = nombre;
+                    if (canon != null) m.put(canon, id);
+                    if (nombre != null) {
+                        m.put(nombre.trim().replaceAll("\\s+", " "), id);
+                        m.put(normalizeLookupKey(nombre), id);
+                    }
                 }
                 return m;
             });
@@ -302,18 +344,35 @@ public class ImportService {
         out.put("procesados", trackings.size());
         out.put("con_marcadores", conMarcadores);
         out.put("sin_marcadores", trackings.size() - conMarcadores);
+        out.put("rechazados", rechazados);
+        out.put("errores", errores);
+        out.put("fecha_default", filasConFechaDefault);
+        out.put("lugar_arrastrado", filasConLugarArrastrado);
         out.put("ms", System.currentTimeMillis() - t0);
         out.put("actor", actor);
         return out;
     }
 
 
+    /** Normaliza encabezados del Excel: mayúsculas, espacios simples y sin depender de acentos comunes. */
+    private static String normalizeHeader(String raw) {
+        if (raw == null) return "";
+        return raw.trim()
+                .replaceAll("\\s+", " ")
+                .toUpperCase(Locale.ROOT)
+                .replace('Á', 'A')
+                .replace('É', 'E')
+                .replace('Í', 'I')
+                .replace('Ó', 'O')
+                .replace('Ú', 'U');
+    }
+
     /** Devuelve el índice de la primera cabecera que coincida con alguno de los nombres dados */
     private static Integer headerIndex(Map<String,Integer> hIndex, String... names) {
         if (hIndex == null || hIndex.isEmpty() || names == null) return null;
         for (String n : names) {
             if (n == null) continue;
-            Integer idx = hIndex.get(n.toUpperCase(Locale.ROOT));
+            Integer idx = hIndex.get(normalizeHeader(n));
             if (idx != null) return idx;
         }
         return null;
@@ -624,7 +683,7 @@ public class ImportService {
 
             for (ConsoRow r : slice) {
                 Long sId = (r.marchamo == null) ? null : sacoMap.get(r.marchamo);
-                Long dId = (r.distrito == null) ? null : distMap.get(r.distrito);
+                Long dId = distritoId(distMap, r.distrito);
                 Long uId = ubicId(ubicMap, r.ubicacion);
                 if (sId != null && dId != null && uId != null && sId != sacoPend && dId != distPend && uId != ubicPend) conMarcadores++;
             }
@@ -642,7 +701,7 @@ public class ImportService {
                         ConsoRow r = slice.get(i);
 
                         Long sacoId = (r.marchamo == null) ? null : sacoMap.get(r.marchamo);
-                        Long distId = (r.distrito == null) ? null : distMap.get(r.distrito);
+                        Long distId = distritoId(distMap, r.distrito);
                         Long ubicId = ubicId(ubicMap, r.ubicacion);
 
                         ps.setLong(1, sacoId == null ? sacoPend : sacoId);
@@ -840,6 +899,31 @@ public class ImportService {
         if (compact.matches("^CAJA[-_A-Z0-9]*$")) return compact;
         if (compact.equals("PENDIENTE")) return compact;
         return null;
+    }
+
+    private static String normalizeLookupKey(String raw) {
+        if (raw == null) return null;
+        return raw.trim()
+                .replaceAll("\\s+", " ")
+                .toUpperCase(Locale.ROOT)
+                .replace('Á', 'A')
+                .replace('É', 'E')
+                .replace('Í', 'I')
+                .replace('Ó', 'O')
+                .replace('Ú', 'U');
+    }
+
+    private static Long distritoId(Map<String, Long> distMap, String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        Long direct = distMap.get(raw.trim().replaceAll("\\s+", " "));
+        if (direct != null) return direct;
+        String canon = canonDistrito(raw);
+        if (canon != null) {
+            Long byCanon = distMap.get(canon);
+            if (byCanon != null) return byCanon;
+        }
+        String key = normalizeLookupKey(raw);
+        return key == null ? null : distMap.get(key);
     }
 
     private static Long ubicId(Map<String, Long> ubicMap, String raw) {
