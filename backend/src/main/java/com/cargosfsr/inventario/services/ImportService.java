@@ -124,7 +124,7 @@ public class ImportService {
             Integer colId            = headerIndex(hIndex, "ID");
             Integer colFecha         = headerIndex(hIndex, "FECHA");
             Integer colTracking      = headerIndex(hIndex, "TRACKING");
-            Integer colTrackingId    = headerIndex(hIndex, "TRACKING ID", "TRACKING_ID", "TRACKINGID");
+            // TRACKING ID se ignora intencionalmente: es una columna repetida/no necesaria.
             Integer colMarchamo      = headerIndex(hIndex, "MARCHAMO");
             Integer colDistrito      = headerIndex(hIndex, "LUGAR", "DISTRITO", "DISTRICT", "ZONA");
             Integer colUbicacion     = headerIndex(hIndex, "MUEBLE", "UBICACION", "UBICACIÓN", "UBICACION_CODIGO", "UBICACIÓN_CODIGO");
@@ -215,17 +215,6 @@ public class ImportService {
                     }
                 }
                 // ======================================================================================
-
-                // Tracking id es obligatorio en el nuevo formato, pero no se guarda en BD porque el
-                // esquema actual solo tiene tracking_code. Se valida para no importar filas incompletas.
-                if (colTrackingId != null) {
-                    String trackingIdRaw = getCellStr(row.getCell(colTrackingId));
-                    if (findAllTrackings(trackingIdRaw).isEmpty()) {
-                        rechazados++;
-                        errores.add("Fila " + (r + 1) + ": Tracking id obligatorio o inválido");
-                        continue;
-                    }
-                }
 
                 if (distritoActual == null || distritoActual.isBlank()) {
                     rechazados++;
