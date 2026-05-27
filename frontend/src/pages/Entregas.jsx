@@ -104,14 +104,6 @@ export default function Entregas() {
     return () => { alive = false }
   }, [nuevoEstado, mensajeros.length])
 
-  const existeTracking = async (t) => {
-    try {
-      const { data } = await api.get('/busqueda/tracking', { params: { q: t, like: 0 } })
-      return Array.isArray(data) && data.length > 0
-    } catch {
-      return false
-    }
-  }
 
   const onAplicar = async () => {
     try {
@@ -127,20 +119,11 @@ export default function Entregas() {
 
       const whenISO = ymdToCRNoonISO(fecha)
 
-      // Validación informativa (no bloquea)
-      const inexistentes = []
-      for (const t of trackings) {
-        // eslint-disable-next-line no-await-in-loop
-        const ok = await existeTracking(t)
-        if (!ok) inexistentes.push(t)
-      }
-      if (inexistentes.length) appendLog(`⚠️ No existen: ${inexistentes.join(', ')}`)
 
       let okCount = 0
       let failCount = 0
 
       for (const t of trackings) {
-        if (inexistentes.includes(t)) { failCount++; continue }
 
         try {
           // eslint-disable-next-line no-await-in-loop
