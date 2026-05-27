@@ -214,7 +214,110 @@ public class AdminController {
         );
     }
 
+    // ---------- Muebles / Ubicaciones ----------
+    // POST /api/admin/muebles
+    @PostMapping("/muebles")
+    public Map<String, Object> addMueble(@RequestBody AddMuebleReq req) {
+        if (req == null || req.mueble == null || req.mueble <= 0) {
+            throw new IllegalArgumentException("Número de mueble inválido");
+        }
+        if (req.estanterias == null || req.estanterias <= 0) {
+            throw new IllegalArgumentException("Número de estanterías inválido");
+        }
+
+        for (int est = 1; est <= req.estanterias; est++) {
+            String codigo = "M " + req.mueble + "'" + est;
+
+            jdbc.update("""
+                INSERT INTO ubicacion(tipo, mueble_num, estanteria_num, codigo, activo)
+                VALUES ('MUEBLE', ?, ?, ?, 1)
+                ON DUPLICATE KEY UPDATE
+                tipo = 'MUEBLE',
+                mueble_num = ?,
+                estanteria_num = ?,
+                activo = 1
+                """,
+                req.mueble, est, codigo,
+                req.mueble, est
+            );
+        }
+
+        return Map.of(
+            "ok", true,
+            "mueble", req.mueble,
+            "estanterias", req.estanterias
+        );
+    }
+
+    // DELETE /api/admin/muebles/{mueble}
+    @DeleteMapping("/muebles/{mueble}")
+    public Map<String, Object> deleteMueble(@PathVariable Integer mueble) {
+        if (mueble == null || mueble <= 0) {
+            throw new IllegalArgumentException("Número de mueble inválido");
+        }
+
+        jdbc.update("""
+            INSERT IGNORE INTO ubicacion(tipo, codigo, activo)
+            VALUES ('MUEBLE', 'PENDIENTE', 1)
+            """);
+
+        Long pendienteId = jdbc.queryForObject(
+            "SELECT id FROM ubicacion WHERE codigo = 'PENDIENTE' LIMIT 1",
+            Long.class
+        );
+
+        if (pendienteId == null) {
+            throw new IllegalStateException("No se pudo asegurar ubicación PENDIENTE");
+        }
+
+        Integer ubicaciones = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM ubicacion WHERE tipo = 'MUEBLE' AND mueble_num = ?",
+            Integer.class,
+            mueble
+        );
+
+        int paquetesMovidos = jdbc.update("""
+            UPDATE paquetes p
+            JOIN ubicacion u ON u.id = p.ubicacion_id
+            SET p.ubicacion_id = ?
+            WHERE u.tipo = 'MUEBLE'
+            AND u.mueble_num = ?
+            """,
+            pendienteId,
+            mueble
+        );
+
+        jdbc.update("""
+            UPDATE sacos s
+            JOIN ubicacion u ON u.id = s.default_ubicacion_id
+            SET s.default_ubicacion_id = ?
+            WHERE u.tipo = 'MUEBLE'
+            AND u.mueble_num = ?
+            """,
+            pendienteId,
+            mueble
+        );
+
+        int ubicacionesEliminadas = jdbc.update(
+            "DELETE FROM ubicacion WHERE tipo = 'MUEBLE' AND mueble_num = ?",
+            mueble
+        );
+
+        return Map.of(
+            "ok", true,
+            "mueble", mueble,
+            "ubicaciones_encontradas", ubicaciones == null ? 0 : ubicaciones,
+            "ubicaciones_eliminadas", ubicacionesEliminadas,
+            "paquetes_movidos", paquetesMovidos
+        );
+    }
+
     // ---------- DTOs ----------
+    public static class AddMuebleReq {
+        public Integer mueble;
+        public Integer estanterias;
+    }
+    
     public static class CreateUserReq {
         public String username;
         public String fullName;
