@@ -132,8 +132,8 @@ public class PaqueteAuditService {
         switch (s) {
             case "CREACION_PAQUETE": return "Creación de paquete";
             case "CAMBIO_ESTADO": return "Cambio de estado";
-            case "CAMBIO_SUBTIPO_DEVOLUCION": return "Cambio de subtipo de devolución";
-            case "CAMBIO_MENSAJERO": return "Cambio de mensajero";
+            case "CAMBIO_SUBTIPO_DEVOLUCION": return "Cambio de subtipo de no entregable";
+            case "ASIGNACION_MENSAJERO": return "Detalle de prueba de entrega";
             case "CAMBIO_MARCHAMO": return "Cambio de marchamo";
             case "CAMBIO_UBICACION": return "Cambio de ubicación";
             case "CAMBIO_DISTRITO": return "Cambio de distrito";
@@ -151,8 +151,8 @@ public class PaqueteAuditService {
         String s = code(value);
         switch (s) {
             case "ESTADO": return "Estado";
-            case "DEVOLUCION_SUBTIPO": return "Subtipo de devolución";
-            case "MENSAJERO": return "Mensajero";
+            case "DEVOLUCION_SUBTIPO": return "Subtipo de devolución/no entregable";
+            case "MENSAJERO": return "Detalle de prueba de entrega";
             case "PAQUETE": return "Paquete";
             case "STATUS_EXTERNO": return "Status externo";
             case "MARCHAMO": return "Marchamo";
@@ -306,12 +306,23 @@ public class PaqueteAuditService {
         String tracking = paquete.getTrackingCode();
         String oldVal = estadoAuditValue(anterior, subtipoAnterior);
         String newVal = estadoAuditValue(nuevo, subtipoNuevo);
-        String desc = descripcionCambioEstado(tracking, oldVal, newVal, moduloOrigen, motivo);
+        String mensajeroNombre = null;
+        if ("PRUEBA_DE_ENTREGA".equals(code(newVal)) && paquete.getMensajero() != null) {
+            mensajeroNombre = paquete.getMensajero().getFullName();
+        }
+        String desc = descripcionCambioEstado(tracking, oldVal, newVal, moduloOrigen, motivo, mensajeroNombre);
         registrar(paquete.getId(), tracking, "CAMBIO_ESTADO", moduloOrigen, desc, "estado", oldVal, newVal, usuario, null);
     }
 
     private static String descripcionCambioEstado(String tracking, Object anterior, Object nuevo, String moduloOrigen, String motivo) {
+        return descripcionCambioEstado(tracking, anterior, nuevo, moduloOrigen, motivo, null);
+    }
+
+    private static String descripcionCambioEstado(String tracking, Object anterior, Object nuevo, String moduloOrigen, String motivo, String mensajeroNombre) {
         String desc = "Se cambió el estado del paquete " + tracking + " de " + labelEstado(anterior) + " a " + labelEstado(nuevo) + " desde " + labelModulo(moduloOrigen) + ".";
+        if (StringUtils.hasText(mensajeroNombre) && "PRUEBA_DE_ENTREGA".equals(code(nuevo))) {
+            desc += " Mensajero: " + mensajeroNombre.trim() + ".";
+        }
         if (StringUtils.hasText(motivo)) desc += " Motivo: " + motivo.trim() + ".";
         return desc;
     }
@@ -333,7 +344,10 @@ public class PaqueteAuditService {
         String oldVal = estadoAuditValue(estadoBase, subtipoAnterior);
         String newVal = estadoAuditValue(estadoBase, subtipoNuevo);
 
-        String desc = "Se cambió el subtipo de devolución del paquete "
+        String tipoMovimiento = "NO_ENTREGABLE".equals(code(estadoBase)) ? "subtipo de no entregable" : "subtipo de devolución";
+        String desc = "Se cambió el "
+            + tipoMovimiento
+            + " del paquete "
             + tracking
             + " de "
             + labelEstado(oldVal)
@@ -359,6 +373,55 @@ public class PaqueteAuditService {
             usuario,
             null
         );
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void registrarDetalleEstado(Paquete paquete,
+                                       Object estado,
+                                       String moduloOrigen,
+                                       String motivo,
+                                       String usuario) {
+        if (paquete == null) return;
+        String tracking = paquete.getTrackingCode();
+        String val = estadoAuditValue(
+            estado,
+            paquete.getDevolucionSubtipo() != null ? paquete.getDevolucionSubtipo().name() : null
+        );
+        String desc = "Se registró el estado " + labelEstado(val) + " del paquete " + tracking + " desde " + labelModulo(moduloOrigen) + ".";
+        if ("PRUEBA_DE_ENTREGA".equals(code(val)) && paquete.getMensajero() != null) {
+            desc += " Mensajero: " + paquete.getMensajero().getFullName() + ".";
+        }
+        if (StringUtils.hasText(motivo)) {
+            desc += " Motivo: " + motivo.trim() + ".";
+        }
+
+        registrar(
+            paquete.getId(),
+            tracking,
+            "CAMBIO_ESTADO",
+            moduloOrigen,
+            desc,
+            "estado",
+            val,
+            val,
+            usuario,
+            null
+        );
+    }
+
+    @Deprecated
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void registrarAsignacionMensajero(Paquete paquete,
+                                             Object mensajeroAnterior,
+                                             Object mensajeroNuevo,
+                                             String moduloOrigen,
+                                             String motivo,
+                                             String usuario) {
+        registrarDetalleEstado(paquete,
+            paquete != null && paquete.getEstado() != null ? paquete.getEstado().name() : "PRUEBA_DE_ENTREGA",
+            moduloOrigen,
+            motivo,
+            usuario);
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
@@ -428,10 +491,10 @@ public class PaqueteAuditService {
             return "Se cambió el estado del paquete " + tracking + " de " + antes + " a " + despues + " desde " + modulo + ".";
         }
         if ("CAMBIO_SUBTIPO_DEVOLUCION".equals(accion)) {
-            return "Se cambió el subtipo de devolución del paquete " + tracking + " de " + antes + " a " + despues + " desde " + modulo + ".";
+            return "Se cambió el subtipo de no entregable del paquete " + tracking + " de " + antes + " a " + despues + " desde " + modulo + ".";
         }
-        if ("CAMBIO_MENSAJERO".equals(accion)) {
-            return "Se cambió el mensajero del paquete " + tracking + " de " + antes + " a " + despues + " desde " + modulo + ".";
+        if ("ASIGNACION_MENSAJERO".equals(accion)) {
+            return "Se registró el detalle de Prueba de entrega del paquete " + tracking + " desde " + modulo + ". Mensajero: " + despues + ".";
         }
         if ("ELIMINACION_PAQUETE".equals(accion)) {
             return "Se eliminó el paquete " + tracking + " desde " + modulo + ".";

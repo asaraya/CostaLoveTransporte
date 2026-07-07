@@ -8,6 +8,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -164,8 +165,7 @@ public class EstadoService {
 
         PaqueteEstado anterior = p.getEstado();
         DevolucionSubtipo subtipoAnterior = p.getDevolucionSubtipo();
-        Usuario mensajeroAnterior = p.getMensajero();
-        String mensajeroAnteriorNombre = mensajeroAnterior != null ? mensajeroAnterior.getFullName() : null;
+        Long mensajeroAnteriorId = p.getMensajero() != null ? p.getMensajero().getId() : null;
         Instant ts = (when != null ? when : Instant.now());
 
         boolean touchedDelivered = false; // delivered_at = ENTREGADO a la PERSONA (PRUEBA_DE_ENTREGA)
@@ -245,8 +245,10 @@ public class EstadoService {
         boolean changesState = (anterior != nuevo) ||
                                (nuevo == PaqueteEstado.NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE && force);
         boolean changesSubtipo = subtipoAnterior != p.getDevolucionSubtipo();
+        Long mensajeroNuevoId = p.getMensajero() != null ? p.getMensajero().getId() : null;
+        boolean changesMensajero = !Objects.equals(mensajeroAnteriorId, mensajeroNuevoId);
 
-        if (!changesState && !changesSubtipo) {
+        if (!changesState && !changesSubtipo && !changesMensajero) {
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("tracking", t);
             out.put("estado_anterior", anterior != null ? anterior.name() : null);
@@ -257,6 +259,8 @@ public class EstadoService {
             out.put("delivered_at", p.getDeliveredAt());
             out.put("returned_at", p.getReturnedAt());
             out.put("devolucion_subtipo", p.getDevolucionSubtipo() != null ? p.getDevolucionSubtipo().name() : null);
+            out.put("mensajero_id", p.getMensajero() != null ? p.getMensajero().getId() : null);
+            out.put("mensajero", p.getMensajero() != null ? p.getMensajero().getFullName() : null);
             return out;
         }
 
@@ -285,22 +289,6 @@ public class EstadoService {
                 user
             );
 
-            if (touchedMensajero) {
-                String mensajeroNuevoNombre = p.getMensajero() != null ? p.getMensajero().getFullName() : null;
-                auditService.registrar(
-                    p.getId(),
-                    t,
-                    "CAMBIO_MENSAJERO",
-                    auditService.moduloDesdeMotivo(motivo),
-                    "Se cambió el mensajero del paquete " + t + " de " + (mensajeroAnteriorNombre != null ? mensajeroAnteriorNombre : "Sin mensajero") + " a " + (mensajeroNuevoNombre != null ? mensajeroNuevoNombre : "Sin mensajero") + ".",
-                    "mensajero",
-                    mensajeroAnteriorNombre,
-                    mensajeroNuevoNombre,
-                    user,
-                    null
-                );
-            }
-
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("tracking", t);
             out.put("estado_anterior", anterior != null ? anterior.name() : null);
@@ -312,6 +300,56 @@ public class EstadoService {
             out.put("delivered_at", p.getDeliveredAt());
             out.put("returned_at", p.getReturnedAt());
             out.put("devolucion_subtipo", p.getDevolucionSubtipo() != null ? p.getDevolucionSubtipo().name() : null);
+            return out;
+        }
+
+        if (!changesState && !changesSubtipo && changesMensajero) {
+            p.setLastStateChangeAt(ts);
+            paquetes.save(p);
+
+            StringBuilder sqlDetalleEstado = new StringBuilder("""
+                UPDATE paquetes
+                   SET last_state_change_at = DATE_SUB(:ts, INTERVAL 6 HOUR),
+                       cambio_en_sistema_por = :who
+            """);
+            if (p.getMensajero() != null) {
+                sqlDetalleEstado.append(", mensajero_id = :mensajeroId, responsable_consolidado = :mensajeroName");
+            } else {
+                sqlDetalleEstado.append(", mensajero_id = NULL, responsable_consolidado = NULL");
+            }
+            sqlDetalleEstado.append(" WHERE id = :id");
+
+            var qDetalleEstado = em.createNativeQuery(sqlDetalleEstado.toString())
+                .setParameter("ts", Timestamp.from(ts))
+                .setParameter("who", user)
+                .setParameter("id", p.getId());
+            if (p.getMensajero() != null) {
+                qDetalleEstado.setParameter("mensajeroId", p.getMensajero().getId());
+                qDetalleEstado.setParameter("mensajeroName", p.getMensajero().getFullName());
+            }
+            qDetalleEstado.executeUpdate();
+
+            auditService.registrarDetalleEstado(
+                p,
+                nuevo.name(),
+                auditService.moduloDesdeMotivo(motivo),
+                motivo,
+                user
+            );
+
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("tracking", t);
+            out.put("estado_anterior", anterior != null ? anterior.name() : null);
+            out.put("estado_nuevo", nuevo.name());
+            out.put("changed", true);
+            out.put("status_detail_changed", true);
+            out.put("when", ts);
+            out.put("changed_by", user);
+            out.put("delivered_at", p.getDeliveredAt());
+            out.put("returned_at", p.getReturnedAt());
+            out.put("devolucion_subtipo", p.getDevolucionSubtipo() != null ? p.getDevolucionSubtipo().name() : null);
+            out.put("mensajero_id", p.getMensajero() != null ? p.getMensajero().getId() : null);
+            out.put("mensajero", p.getMensajero() != null ? p.getMensajero().getFullName() : null);
             return out;
         }
 
@@ -395,22 +433,6 @@ public class EstadoService {
             motivo,
             user
         );
-
-        if (touchedMensajero) {
-            String mensajeroNuevoNombre = p.getMensajero() != null ? p.getMensajero().getFullName() : null;
-            auditService.registrar(
-                p.getId(),
-                t,
-                "CAMBIO_MENSAJERO",
-                auditService.moduloDesdeMotivo(motivo),
-                "Se cambió el mensajero del paquete " + t + " de " + (mensajeroAnteriorNombre != null ? mensajeroAnteriorNombre : "Sin mensajero") + " a " + (mensajeroNuevoNombre != null ? mensajeroNuevoNombre : "Sin mensajero") + ".",
-                "mensajero",
-                mensajeroAnteriorNombre,
-                mensajeroNuevoNombre,
-                user,
-                null
-            );
-        }
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("tracking", t);
