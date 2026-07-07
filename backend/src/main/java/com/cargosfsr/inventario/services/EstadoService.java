@@ -163,6 +163,7 @@ public class EstadoService {
         initDbSession(user);
 
         PaqueteEstado anterior = p.getEstado();
+        DevolucionSubtipo subtipoAnterior = p.getDevolucionSubtipo();
         Instant ts = (when != null ? when : Instant.now());
 
         boolean touchedDelivered = false; // delivered_at = ENTREGADO a la PERSONA (PRUEBA_DE_ENTREGA)
@@ -209,7 +210,7 @@ public class EstadoService {
 
             p.setReturnedAt(ts);
             touchedReturned = true;
-            p.setDevolucionSubtipo(sub != null ? sub : DevolucionSubtipo.FUERA_DE_RUTA);
+            p.setDevolucionSubtipo(sub != null ? sub : (p.getDevolucionSubtipo() != null ? p.getDevolucionSubtipo() : DevolucionSubtipo.FUERA_DE_RUTA));
 
         } else if (nuevo == PaqueteEstado.NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE && force) {
             // reset a "disponible": limpia entrega/devolución
@@ -241,13 +242,53 @@ public class EstadoService {
 
         boolean changesState = (anterior != nuevo) ||
                                (nuevo == PaqueteEstado.NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE && force);
+        boolean changesSubtipo = subtipoAnterior != p.getDevolucionSubtipo();
 
-        if (!changesState) {
+        if (!changesState && !changesSubtipo) {
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("tracking", t);
             out.put("estado_anterior", anterior != null ? anterior.name() : null);
             out.put("estado_nuevo", nuevo.name());
             out.put("changed", false);
+            out.put("when", ts);
+            out.put("changed_by", user);
+            out.put("delivered_at", p.getDeliveredAt());
+            out.put("returned_at", p.getReturnedAt());
+            out.put("devolucion_subtipo", p.getDevolucionSubtipo() != null ? p.getDevolucionSubtipo().name() : null);
+            return out;
+        }
+
+        if (!changesState && changesSubtipo) {
+            p.setLastStateChangeAt(ts);
+            paquetes.save(p);
+
+            em.createNativeQuery("""
+                UPDATE paquetes
+                   SET last_state_change_at = DATE_SUB(:ts, INTERVAL 6 HOUR),
+                       cambio_en_sistema_por = :who
+                 WHERE id = :id
+            """)
+            .setParameter("ts", Timestamp.from(ts))
+            .setParameter("who", user)
+            .setParameter("id", p.getId())
+            .executeUpdate();
+
+            auditService.registrarCambioSubtipoDevolucion(
+                p,
+                nuevo.name(),
+                subtipoAnterior != null ? subtipoAnterior.name() : null,
+                p.getDevolucionSubtipo() != null ? p.getDevolucionSubtipo().name() : null,
+                auditService.moduloDesdeMotivo(motivo),
+                motivo,
+                user
+            );
+
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("tracking", t);
+            out.put("estado_anterior", anterior != null ? anterior.name() : null);
+            out.put("estado_nuevo", nuevo.name());
+            out.put("changed", true);
+            out.put("subtipo_changed", true);
             out.put("when", ts);
             out.put("changed_by", user);
             out.put("delivered_at", p.getDeliveredAt());
@@ -326,7 +367,16 @@ public class EstadoService {
         """).setParameter("id", h.getId())
           .executeUpdate();
 
-        auditService.registrarCambioEstado(p, anterior != null ? anterior.name() : null, nuevo.name(), auditService.moduloDesdeMotivo(motivo), motivo, user);
+        auditService.registrarCambioEstado(
+            p,
+            anterior != null ? anterior.name() : null,
+            nuevo.name(),
+            subtipoAnterior != null ? subtipoAnterior.name() : null,
+            p.getDevolucionSubtipo() != null ? p.getDevolucionSubtipo().name() : null,
+            auditService.moduloDesdeMotivo(motivo),
+            motivo,
+            user
+        );
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("tracking", t);
@@ -427,6 +477,7 @@ public class EstadoService {
 
         Paquete antes = paquetes.findByTrackingCode(t).orElseThrow();
         PaqueteEstado estadoAnterior = antes.getEstado();
+        DevolucionSubtipo subtipoAnterior = antes.getDevolucionSubtipo();
         Instant when = (statusAt != null ? statusAt : Instant.now());
         em.createNativeQuery("CALL sp_aplicar_status_externo(?, ?, ?, ?)")
           .setParameter(1, t)
@@ -442,8 +493,30 @@ public class EstadoService {
           .setParameter("id", p.getId())
           .executeUpdate();
 
-        if (estadoAnterior != p.getEstado()) {
-            auditService.registrarCambioEstado(p, estadoAnterior != null ? estadoAnterior.name() : null, p.getEstado().name(), "STATUS_EXTERNO", "AUTO: status externo - " + statusExterno, user);
+        boolean cambioEstado = estadoAnterior != p.getEstado();
+        boolean cambioSubtipo = subtipoAnterior != p.getDevolucionSubtipo();
+
+        if (cambioEstado) {
+            auditService.registrarCambioEstado(
+                p,
+                estadoAnterior != null ? estadoAnterior.name() : null,
+                p.getEstado().name(),
+                subtipoAnterior != null ? subtipoAnterior.name() : null,
+                p.getDevolucionSubtipo() != null ? p.getDevolucionSubtipo().name() : null,
+                "STATUS_EXTERNO",
+                "AUTO: status externo - " + statusExterno,
+                user
+            );
+        } else if (cambioSubtipo) {
+            auditService.registrarCambioSubtipoDevolucion(
+                p,
+                p.getEstado() != null ? p.getEstado().name() : null,
+                subtipoAnterior != null ? subtipoAnterior.name() : null,
+                p.getDevolucionSubtipo() != null ? p.getDevolucionSubtipo().name() : null,
+                "STATUS_EXTERNO",
+                "AUTO: status externo - " + statusExterno,
+                user
+            );
         } else {
             auditService.registrar(p.getId(), t, "ACTUALIZACION_STATUS_EXTERNO", "STATUS_EXTERNO", "Se actualizó el status externo del paquete " + t + " desde STATUS_EXTERNO.", "status_externo", null, statusExterno, user, null);
         }
