@@ -17,39 +17,19 @@ function val(value) {
   return value === null || value === undefined || value === '' ? '—' : String(value)
 }
 
-function humanize(value) {
-  if (!value) return '—'
-  const raw = String(value).trim()
-  return raw.toLowerCase().replaceAll('_', ' ').replace(/^[a-záéíóúñ]/, c => c.toUpperCase())
-}
-
-function labelSubtipo(value) {
-  const raw = String(value || '').trim().toUpperCase()
-  const map = {
-    FUERA_DE_RUTA: 'Fuera de ruta',
-    VENCIDOS: 'Vencidos',
-    DOS_INTENTOS: 'Dos intentos',
-    ENRUTE: 'En ruta',
-    OTRAS_ZONAS: 'Otras zonas',
-    NO_ENTREGAR: 'No entregar',
-    TRANSPORTE: 'Transporte'
-  }
-  return map[raw] || humanize(raw)
-}
-
-function label(value) {
+function fallbackLabel(value) {
   if (!value) return '—'
   const map = {
     CREACION_PAQUETE: 'Creación de paquete',
     CAMBIO_ESTADO: 'Cambio de estado',
-    CAMBIO_SUBTIPO_DEVOLUCION: 'Cambio de subtipo de no entregable',
-    ASIGNACION_MENSAJERO: 'Detalle de prueba de entrega',
+    CAMBIO_SUBTIPO_DEVOLUCION: 'Cambio de subtipo',
     CAMBIO_MARCHAMO: 'Cambio de marchamo',
     CAMBIO_UBICACION: 'Cambio de ubicación',
     CAMBIO_DISTRITO: 'Cambio de distrito',
     ACTUALIZACION_DATOS: 'Actualización de datos',
     ACTUALIZACION_STATUS_EXTERNO: 'Actualización de status externo',
     ELIMINACION_PAQUETE: 'Eliminación de paquete',
+    ASIGNACION_MENSAJERO: 'Detalle de prueba de entrega',
     RECEPCION: 'Recepción',
     IMPORTACION_CONSOLIDADO: 'Importación de consolidado',
     IMPORTACION_TRACKS_CSV: 'Importación Tracks CSV',
@@ -62,24 +42,40 @@ function label(value) {
     HISTORIAL_EXISTENTE: 'Historial existente',
     ADMIN: 'Administración',
     ESTADO: 'Estado',
-    DEVOLUCION_SUBTIPO: 'Subtipo de no entregable',
+    DEVOLUCION_SUBTIPO: 'Subtipo',
     MENSAJERO: 'Detalle de prueba de entrega',
     PAQUETE: 'Paquete',
+    DEVOLUCION: 'Devolución',
+    NO_ENTREGABLE: 'No entregable',
+    EN_INVENTARIO: 'En inventario',
+    ENTREGADO: 'Entregado',
     PRUEBA_DE_ENTREGA: 'Prueba de entrega',
     ENTREGADO_A_TRANSPORTISTA_LOCAL: 'Entregado a transportista local',
     NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE: 'No entregado - consignatario no disponible',
     ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO: 'Entregado a transportista local - 2do intento',
-    NO_ENTREGABLE: 'No entregable',
-    TR_A_CA: 'TR a CA'
+    TR_A_CA: 'TR a CA',
+    FUERA_DE_RUTA: 'Fuera de ruta',
+    VENCIDOS: 'Vencidos',
+    DOS_INTENTOS: 'Dos intentos',
+    ENRUTE: 'En ruta',
+    EN_RUTA: 'En ruta',
+    OTRAS_ZONAS: 'Otras zonas',
+    NO_ENTREGAR: 'No entregar',
+    TRANSPORTE: 'Transporte'
   }
   const raw = String(value).trim()
   if (map[raw]) return map[raw]
   if (raw.includes('__')) {
-    const [estado, subtipo] = raw.split('__')
-    if (estado === 'NO_ENTREGABLE') return `No entregable (${labelSubtipo(subtipo)})`
-    if (estado === 'DEVOLUCION') return `Devolución (${labelSubtipo(subtipo)})`
+    const [estado, ...subtipoParts] = raw.split('__')
+    const subtipo = subtipoParts.join('__')
+    if (estado === 'DEVOLUCION') return `Devolución (${fallbackLabel(subtipo).toLowerCase()})`
+    if (estado === 'NO_ENTREGABLE') return `No entregable (${fallbackLabel(subtipo).toLowerCase()})`
   }
-  return humanize(raw)
+  return raw.toLowerCase().replaceAll('_', ' ').replace(/^[a-záéíóúñ]/, c => c.toUpperCase())
+}
+
+function text(it, field, rawField) {
+  return val(it?.[field] ?? fallbackLabel(it?.[rawField]))
 }
 
 function chipStyle(action) {
@@ -87,22 +83,34 @@ function chipStyle(action) {
   let bg = '#e0f2fe'
   let color = '#075985'
   if (a.includes('ESTADO') || a.includes('SUBTIPO')) { bg = '#dcfce7'; color = '#166534' }
-  if (a.includes('MENSAJERO')) { bg = '#e0f2fe'; color = '#075985' }
   if (a.includes('ELIMINACION')) { bg = '#fee2e2'; color = '#991b1b' }
   if (a.includes('CREACION')) { bg = '#ede9fe'; color = '#5b21b6' }
+  if (a.includes('MARCHAMO') || a.includes('UBICACION') || a.includes('DISTRITO')) { bg = '#fef3c7'; color = '#92400e' }
   return { background: bg, color, borderRadius: 999, padding: '5px 10px', fontWeight: 700, fontSize: 12, display: 'inline-block' }
 }
 
 const cardStyle = {
   background: '#fff',
-  border: '1px solid #dbe3ef',
+  border: '1px solid #e2e8f0',
   borderRadius: 14,
   padding: 16,
-  boxShadow: '0 2px 8px rgba(15, 23, 42, 0.06)'
+  boxShadow: '0 1px 2px rgba(15, 23, 42, 0.06)'
 }
 
-const rowStyle = { marginTop: 6, color: '#0f172a', lineHeight: 1.45 }
-const labelStyle = { fontWeight: 800, color: '#163E7A' }
+const labelStyle = {
+  color: '#64748b',
+  fontSize: 12,
+  fontWeight: 700,
+  textTransform: 'uppercase',
+  letterSpacing: 0.4,
+  marginBottom: 3
+}
+
+const valueStyle = {
+  color: '#0f172a',
+  fontSize: 14,
+  lineHeight: 1.35
+}
 
 export default function HistorialCambios() {
   const [tracking, setTracking] = useState('')
@@ -134,10 +142,10 @@ export default function HistorialCambios() {
   const items = data?.items || []
 
   return (
-    <div className="container" style={{ maxWidth: 1050, margin: '0 auto', padding: 20 }}>
+    <div className="container" style={{ maxWidth: 1120, margin: '0 auto', padding: 20 }}>
       <h1 style={{ color: '#163E7A', marginBottom: 8 }}>Historial de cambios</h1>
       <p style={{ marginTop: 0, color: '#334155' }}>
-        Ingrese un tracking para ver todos los movimientos registrados del paquete.
+        Consulte los movimientos registrados de un paquete por código de tracking.
       </p>
 
       <form onSubmit={buscar} style={{ display: 'flex', gap: 10, margin: '18px 0 20px' }}>
@@ -193,23 +201,40 @@ export default function HistorialCambios() {
         <div style={{ display: 'grid', gap: 12 }}>
           {items.map((it) => (
             <article key={it.id} style={cardStyle}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-                <div style={{ fontWeight: 800, color: '#0f172a' }}>{fmtDate(it.fecha_hora)}</div>
-                <span style={chipStyle(it.accion)}>{val(it.accion_label || label(it.accion))}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', marginBottom: 10 }}>
+                <div>
+                  <span style={chipStyle(it.accion)}>{text(it, 'accion_label', 'accion')}</span>
+                  <div style={{ marginTop: 8, color: '#0f172a', fontWeight: 700 }}>
+                    {val(it.descripcion_label || it.descripcion)}
+                  </div>
+                </div>
+                <div style={{ color: '#64748b', whiteSpace: 'nowrap', fontSize: 13 }}>
+                  {fmtDate(it.fecha_hora)}
+                </div>
               </div>
 
-              <div style={rowStyle}><span style={labelStyle}>Usuario:</span> {val(it.usuario)}</div>
-              <div style={rowStyle}><span style={labelStyle}>Origen:</span> {val(it.modulo_origen_label || label(it.modulo_origen))}</div>
-              <div style={rowStyle}><span style={labelStyle}>Acción:</span> {val(it.accion_label || label(it.accion))}</div>
-              <div style={rowStyle}><span style={labelStyle}>Detalle:</span> {val(it.descripcion_label || it.descripcion)}</div>
-
-              {(it.campo_afectado || it.valor_anterior || it.valor_nuevo) && (
-                <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid #e2e8f0', color: '#334155' }}>
-                  <div style={rowStyle}><span style={labelStyle}>Campo:</span> {val(it.campo_label || label(it.campo_afectado))}</div>
-                  <div style={rowStyle}><span style={labelStyle}>Antes:</span> {val(it.valor_anterior_label || label(it.valor_anterior))}</div>
-                  <div style={rowStyle}><span style={labelStyle}>Después:</span> {val(it.valor_nuevo_label || label(it.valor_nuevo))}</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))', gap: 12, marginTop: 14 }}>
+                <div>
+                  <div style={labelStyle}>Usuario</div>
+                  <div style={valueStyle}>{val(it.usuario)}</div>
                 </div>
-              )}
+                <div>
+                  <div style={labelStyle}>Origen</div>
+                  <div style={valueStyle}>{text(it, 'modulo_origen_label', 'modulo_origen')}</div>
+                </div>
+                <div>
+                  <div style={labelStyle}>Campo</div>
+                  <div style={valueStyle}>{text(it, 'campo_label', 'campo_afectado')}</div>
+                </div>
+                <div>
+                  <div style={labelStyle}>Antes</div>
+                  <div style={valueStyle}>{val(it.valor_anterior_label ?? fallbackLabel(it.valor_anterior))}</div>
+                </div>
+                <div>
+                  <div style={labelStyle}>Después</div>
+                  <div style={valueStyle}>{val(it.valor_nuevo_label ?? fallbackLabel(it.valor_nuevo))}</div>
+                </div>
+              </div>
             </article>
           ))}
         </div>
