@@ -23,6 +23,7 @@ function fallbackLabel(value) {
     CREACION_PAQUETE: 'Creación de paquete',
     CAMBIO_ESTADO: 'Cambio de estado',
     CAMBIO_SUBTIPO_DEVOLUCION: 'Cambio de subtipo de devolución',
+    CAMBIO_MENSAJERO: 'Cambio de mensajero',
     CAMBIO_MARCHAMO: 'Cambio de marchamo',
     CAMBIO_UBICACION: 'Cambio de ubicación',
     CAMBIO_DISTRITO: 'Cambio de distrito',
@@ -38,9 +39,10 @@ function fallbackLabel(value) {
     MOVER_MUEBLES: 'Mover muebles',
     ESTADO: 'Estado',
     DEVOLUCION_SUBTIPO: 'Subtipo de devolución',
+    MENSAJERO: 'Mensajero',
     PAQUETE: 'Paquete',
     DEVOLUCION: 'Devolución',
-    NO_ENTREGABLE: 'Devolución',
+    NO_ENTREGABLE: 'No entregable',
     EN_INVENTARIO: 'En inventario',
     ENTREGADO: 'Entregado',
     PRUEBA_DE_ENTREGA: 'Prueba de entrega',
@@ -53,7 +55,8 @@ function fallbackLabel(value) {
   if (map[raw]) return map[raw]
   if (raw.includes('__')) {
     const [estado, subtipo] = raw.split('__')
-    if (estado === 'DEVOLUCION' || estado === 'NO_ENTREGABLE') return `Devolución (${fallbackLabel(subtipo).toLowerCase()})`
+    if (estado === 'DEVOLUCION') return `Devolución (${fallbackLabel(subtipo).toLowerCase()})`
+    if (estado === 'NO_ENTREGABLE') return `No entregable (${fallbackLabel(subtipo).toLowerCase()})`
   }
   return raw.toLowerCase().replaceAll('_', ' ').replace(/^[a-záéíóúñ]/, c => c.toUpperCase())
 }

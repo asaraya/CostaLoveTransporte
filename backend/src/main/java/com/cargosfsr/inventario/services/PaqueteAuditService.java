@@ -93,8 +93,9 @@ public class PaqueteAuditService {
             case "EN_INVENTARIO": return "En inventario";
             case "ENTREGADO": return "Entregado";
             case "DEVOLUCION":
-            case "NO_ENTREGABLE":
                 return StringUtils.hasText(subtipo) ? "Devolución (" + labelSubtipo(subtipo) + ")" : "Devolución";
+            case "NO_ENTREGABLE":
+                return StringUtils.hasText(subtipo) ? "No entregable (" + labelSubtipo(subtipo) + ")" : "No entregable";
             case "PUSH": return "Push";
             case "ALMACENAJE": return "Almacenaje";
             case "EN_TRANSITO_A_TIENDAS_AEROPOST": return "En tránsito a tiendas Aeropost";
@@ -132,6 +133,7 @@ public class PaqueteAuditService {
             case "CREACION_PAQUETE": return "Creación de paquete";
             case "CAMBIO_ESTADO": return "Cambio de estado";
             case "CAMBIO_SUBTIPO_DEVOLUCION": return "Cambio de subtipo de devolución";
+            case "CAMBIO_MENSAJERO": return "Cambio de mensajero";
             case "CAMBIO_MARCHAMO": return "Cambio de marchamo";
             case "CAMBIO_UBICACION": return "Cambio de ubicación";
             case "CAMBIO_DISTRITO": return "Cambio de distrito";
@@ -150,6 +152,7 @@ public class PaqueteAuditService {
         switch (s) {
             case "ESTADO": return "Estado";
             case "DEVOLUCION_SUBTIPO": return "Subtipo de devolución";
+            case "MENSAJERO": return "Mensajero";
             case "PAQUETE": return "Paquete";
             case "STATUS_EXTERNO": return "Status externo";
             case "MARCHAMO": return "Marchamo";
@@ -426,6 +429,9 @@ public class PaqueteAuditService {
         }
         if ("CAMBIO_SUBTIPO_DEVOLUCION".equals(accion)) {
             return "Se cambió el subtipo de devolución del paquete " + tracking + " de " + antes + " a " + despues + " desde " + modulo + ".";
+        }
+        if ("CAMBIO_MENSAJERO".equals(accion)) {
+            return "Se cambió el mensajero del paquete " + tracking + " de " + antes + " a " + despues + " desde " + modulo + ".";
         }
         if ("ELIMINACION_PAQUETE".equals(accion)) {
             return "Se eliminó el paquete " + tracking + " desde " + modulo + ".";

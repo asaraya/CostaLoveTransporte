@@ -164,6 +164,8 @@ public class EstadoService {
 
         PaqueteEstado anterior = p.getEstado();
         DevolucionSubtipo subtipoAnterior = p.getDevolucionSubtipo();
+        Usuario mensajeroAnterior = p.getMensajero();
+        String mensajeroAnteriorNombre = mensajeroAnterior != null ? mensajeroAnterior.getFullName() : null;
         Instant ts = (when != null ? when : Instant.now());
 
         boolean touchedDelivered = false; // delivered_at = ENTREGADO a la PERSONA (PRUEBA_DE_ENTREGA)
@@ -283,6 +285,22 @@ public class EstadoService {
                 user
             );
 
+            if (touchedMensajero) {
+                String mensajeroNuevoNombre = p.getMensajero() != null ? p.getMensajero().getFullName() : null;
+                auditService.registrar(
+                    p.getId(),
+                    t,
+                    "CAMBIO_MENSAJERO",
+                    auditService.moduloDesdeMotivo(motivo),
+                    "Se cambió el mensajero del paquete " + t + " de " + (mensajeroAnteriorNombre != null ? mensajeroAnteriorNombre : "Sin mensajero") + " a " + (mensajeroNuevoNombre != null ? mensajeroNuevoNombre : "Sin mensajero") + ".",
+                    "mensajero",
+                    mensajeroAnteriorNombre,
+                    mensajeroNuevoNombre,
+                    user,
+                    null
+                );
+            }
+
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("tracking", t);
             out.put("estado_anterior", anterior != null ? anterior.name() : null);
@@ -377,6 +395,22 @@ public class EstadoService {
             motivo,
             user
         );
+
+        if (touchedMensajero) {
+            String mensajeroNuevoNombre = p.getMensajero() != null ? p.getMensajero().getFullName() : null;
+            auditService.registrar(
+                p.getId(),
+                t,
+                "CAMBIO_MENSAJERO",
+                auditService.moduloDesdeMotivo(motivo),
+                "Se cambió el mensajero del paquete " + t + " de " + (mensajeroAnteriorNombre != null ? mensajeroAnteriorNombre : "Sin mensajero") + " a " + (mensajeroNuevoNombre != null ? mensajeroNuevoNombre : "Sin mensajero") + ".",
+                "mensajero",
+                mensajeroAnteriorNombre,
+                mensajeroNuevoNombre,
+                user,
+                null
+            );
+        }
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("tracking", t);
