@@ -27,6 +27,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.cargosfsr.inventario.auth.CurrentUser;
 import com.cargosfsr.inventario.model.Distrito;
 import com.cargosfsr.inventario.model.Paquete;
 import com.cargosfsr.inventario.model.Saco;
@@ -43,12 +44,21 @@ public class MarchamoUpdateService {
     private final SacoRepository sacos;
     private final DistritoRepository distritos;
     private final UbicacionRepository ubicaciones;
+    private final CurrentUser currentUser;
+    private final PaqueteAuditService auditService;
 
-    public MarchamoUpdateService(PaqueteRepository paquetes, SacoRepository sacos, DistritoRepository distritos, UbicacionRepository ubicaciones) {
+    public MarchamoUpdateService(PaqueteRepository paquetes,
+                                 SacoRepository sacos,
+                                 DistritoRepository distritos,
+                                 UbicacionRepository ubicaciones,
+                                 CurrentUser currentUser,
+                                 PaqueteAuditService auditService) {
         this.paquetes = paquetes;
         this.sacos = sacos;
         this.distritos = distritos;
         this.ubicaciones = ubicaciones;
+        this.currentUser = currentUser;
+        this.auditService = auditService;
     }
 
     private static final Pattern TRACKING_P = Pattern.compile("^[A-Z0-9]{2,}$");
@@ -86,7 +96,10 @@ public class MarchamoUpdateService {
                     continue;
                 }
 
-                // Distrito (opcional)
+                String oldMarchamo = p.getSaco() != null ? p.getSaco().getMarchamo() : null;
+                String oldDistrito = p.getDistrito() != null ? p.getDistrito().getNombre() : null;
+                String oldUbicacion = p.getUbicacion() != null ? p.getUbicacion().getCodigo() : null;
+
                 if (updateDistrito && a.distritoNombre != null) {
                     String canon = canonicalDistrito(a.distritoNombre);
                     if (canon == null) {
@@ -137,6 +150,19 @@ public class MarchamoUpdateService {
 
                 p.setSaco(s);
                 paquetes.save(p);
+                String actor = currentUser.display();
+                String newMarchamo = p.getSaco() != null ? p.getSaco().getMarchamo() : null;
+                String newDistrito = p.getDistrito() != null ? p.getDistrito().getNombre() : null;
+                String newUbicacion = p.getUbicacion() != null ? p.getUbicacion().getCodigo() : null;
+                if (!java.util.Objects.equals(oldMarchamo, newMarchamo)) {
+                    auditService.registrar(p.getId(), tracking, "CAMBIO_MARCHAMO", "MOVER_MUEBLES", "Se cambió el marchamo del paquete " + tracking + " desde Mover Muebles.", "marchamo", oldMarchamo, newMarchamo, actor, null);
+                }
+                if (!java.util.Objects.equals(oldDistrito, newDistrito)) {
+                    auditService.registrar(p.getId(), tracking, "CAMBIO_DISTRITO", "MOVER_MUEBLES", "Se cambió el distrito del paquete " + tracking + " desde Mover Muebles.", "distrito", oldDistrito, newDistrito, actor, null);
+                }
+                if (!java.util.Objects.equals(oldUbicacion, newUbicacion)) {
+                    auditService.registrar(p.getId(), tracking, "CAMBIO_UBICACION", "MOVER_MUEBLES", "Se cambió la ubicación del paquete " + tracking + " desde Mover Muebles.", "ubicacion", oldUbicacion, newUbicacion, actor, null);
+                }
                 asignados++;
 
             } catch (Exception ex) {

@@ -38,6 +38,7 @@ public class RegistroService {
     private final DistritoRepository distritos;
     private final UbicacionRepository ubicaciones;
     private final PaqueteEstadoHistorialRepository historial;
+    private final PaqueteAuditService auditService;
     private final CurrentUser currentUser;
 
     @PersistenceContext
@@ -48,12 +49,14 @@ public class RegistroService {
                            DistritoRepository distritos,
                            UbicacionRepository ubicaciones,
                            PaqueteEstadoHistorialRepository historial,
+                           PaqueteAuditService auditService,
                            CurrentUser currentUser) {
         this.paquetes = paquetes;
         this.sacos = sacos;
         this.distritos = distritos;
         this.ubicaciones = ubicaciones;
         this.historial = historial;
+        this.auditService = auditService;
         this.currentUser = currentUser;
     }
 
@@ -129,7 +132,8 @@ public class RegistroService {
 
         try {
             initDbSession(actor());
-            paquetes.save(p); // trigger AFTER INSERT insertará historial (CREACION)
+            paquetes.save(p);
+            auditService.registrarCreacion(p, "RECEPCION", actor());
 
             // Ajuste de hora en BD: mover -6h (DB hace la conversión)
             em.createNativeQuery("""
@@ -171,6 +175,7 @@ public class RegistroService {
         Paquete p = paquetes.findByTrackingCode(t)
                 .orElseThrow(() -> new IllegalArgumentException("No existe paquete con tracking: " + t));
 
+        auditService.registrarEliminacion(p, "RECEPCION", actor());
         historial.deleteByPaqueteId(p.getId());
         paquetes.delete(p);
     }
@@ -232,6 +237,10 @@ public class RegistroService {
                 .collect(java.util.stream.Collectors.toSet());
 
         java.util.List<Long> ids = existentes.stream().map(Paquete::getId).toList();
+
+        for (Paquete p : existentes) {
+            auditService.registrarEliminacion(p, "RECEPCION", actor());
+        }
 
         if (!ids.isEmpty()) {
             historial.deleteByPaqueteIdIn(ids);

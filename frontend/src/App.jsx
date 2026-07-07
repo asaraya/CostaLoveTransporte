@@ -10,6 +10,7 @@ import Importar from './pages/Importar.jsx'
 import Login from './pages/Login.jsx'
 import Register from './pages/Register.jsx'
 import AdminProfile from './pages/AdminProfile.jsx'
+import HistorialCambios from './pages/HistorialCambios.jsx'
 import logoUrl from './assets/cargo_logo.svg'
 import HojaRuta from './pages/HojaRuta.jsx'
 import { api } from './api'
@@ -248,6 +249,9 @@ export default function App() {
               <NavLink className={link} to="/importar">
                 Importar
               </NavLink>
+              <NavLink className={link} to="/historial">
+                Historial
+              </NavLink>
 
               {/* Solo ADMIN */}
               {me?.role === 'ADMIN' && (
@@ -401,6 +405,14 @@ export default function App() {
             element={
               <RequireAuth>
                 <Importar />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/historial"
+            element={
+              <RequireAuth>
+                <HistorialCambios />
               </RequireAuth>
             }
           />

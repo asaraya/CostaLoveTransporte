@@ -55,11 +55,13 @@ import com.cargosfsr.inventario.auth.CurrentUser;
 public class ImportService {
 
     private final JdbcTemplate jdbc;
-    private final CurrentUser currentUser; // actor = usuario logueado
+    private final CurrentUser currentUser;
+    private final PaqueteAuditService auditService;
 
-    public ImportService(JdbcTemplate jdbc, CurrentUser currentUser) {
+    public ImportService(JdbcTemplate jdbc, CurrentUser currentUser, PaqueteAuditService auditService) {
         this.jdbc = jdbc;
         this.currentUser = currentUser;
+        this.auditService = auditService;
     }
 
     // ==========================
@@ -317,8 +319,8 @@ public class ImportService {
                 .collect(Collectors.toList());
 
         String actor = currentUser.display();
+        Set<String> existentesAntes = fetchExistentes(new HashSet<>(trackings));
 
-        // Inserta paquetes faltantes con saco/distrito PENDIENTE y estado base "DISPONIBLE"
         try {
             jdbc.update("SET @changed_by = ?", actor);
             batchInsertIgnorePaquetes(trackings, sacoPend, distPend, ubicPend);
@@ -327,6 +329,35 @@ public class ImportService {
         }
 
         int conMarcadores = batchUpdatePaquetes(uniqRows, sacoMap, distMap, ubicMap, sacoPend, distPend, ubicPend, actor);
+
+        for (ConsoRow r : uniqRows) {
+            if (r == null || isBlank(r.tracking)) continue;
+            if (existentesAntes.contains(r.tracking)) {
+                auditService.registrarPorTracking(
+                    r.tracking,
+                    "ACTUALIZACION_DATOS",
+                    "IMPORTACION_CONSOLIDADO",
+                    "Se actualizó el paquete " + r.tracking + " desde Importación de Consolidado.",
+                    "datos_consolidado",
+                    null,
+                    "ACTUALIZADO",
+                    actor,
+                    null
+                );
+            } else {
+                auditService.registrarPorTracking(
+                    r.tracking,
+                    "CREACION_PAQUETE",
+                    "IMPORTACION_CONSOLIDADO",
+                    "Se agregó el paquete " + r.tracking + " desde Importación de Consolidado.",
+                    "estado",
+                    null,
+                    "ENTREGADO_A_TRANSPORTISTA_LOCAL",
+                    actor,
+                    null
+                );
+            }
+        }
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("total", trackings.size());
@@ -490,6 +521,7 @@ public class ImportService {
                     continue;
                 }
                 try {
+                    String estadoAntes = fetchEstado(f.tracking);
                     // Si el CSV no trae distrito válido, preserva el distrito actual del paquete.
                     String distritoParaSP = f.distritoCanon;
                     if (isBlank(distritoParaSP)) {
@@ -521,6 +553,32 @@ public class ImportService {
                                 f.tracking, status, f.statusAt, actor);
 
                         jdbc.update("UPDATE paquetes SET cambio_en_sistema_por=? WHERE tracking_code=?", actor, f.tracking);
+                        String estadoDespues = fetchEstado(f.tracking);
+                        if (estadoAntes != null && estadoDespues != null && !estadoAntes.equals(estadoDespues)) {
+                            auditService.registrarPorTracking(
+                                f.tracking,
+                                "CAMBIO_ESTADO",
+                                "IMPORTACION_TRACKS_CSV",
+                                "Se cambió el estado del paquete " + f.tracking + " de " + estadoAntes + " a " + estadoDespues + " desde Importación Tracks CSV.",
+                                "estado",
+                                estadoAntes,
+                                estadoDespues,
+                                actor,
+                                null
+                            );
+                        } else {
+                            auditService.registrarPorTracking(
+                                f.tracking,
+                                "ACTUALIZACION_STATUS_EXTERNO",
+                                "IMPORTACION_TRACKS_CSV",
+                                "Se actualizó el status externo del paquete " + f.tracking + " desde Importación Tracks CSV.",
+                                "status_externo",
+                                null,
+                                status,
+                                actor,
+                                null
+                            );
+                        }
 
                         String norm = normalize(status);
                         boolean isEntregado = norm.contains("prueba de entrega") || norm.startsWith("entregado")
@@ -538,6 +596,17 @@ public class ImportService {
                     } else {
                         actualizados++;
                         jdbc.update("UPDATE paquetes SET cambio_en_sistema_por=? WHERE tracking_code=?", actor, f.tracking);
+                        auditService.registrarPorTracking(
+                            f.tracking,
+                            "ACTUALIZACION_DATOS",
+                            "IMPORTACION_TRACKS_CSV",
+                            "Se actualizaron datos del paquete " + f.tracking + " desde Importación Tracks CSV.",
+                            "datos_tracks",
+                            null,
+                            "ACTUALIZADO",
+                            actor,
+                            null
+                        );
                     }
                 } catch (Exception ex) {
                     rechazados++; errores.add("Fila " + f.recNo + " (" + f.tracking + "): " + ex.getMessage());
@@ -1066,6 +1135,15 @@ public class ImportService {
             out.addAll(found);
         }
         return out;
+    }
+
+    private String fetchEstado(String tracking) {
+        if (tracking == null || tracking.isBlank()) return null;
+        try {
+            return jdbc.query("SELECT estado FROM paquetes WHERE tracking_code = ? LIMIT 1", rs -> rs.next() ? rs.getString(1) : null, tracking);
+        } catch (Exception ex) {
+            return null;
+        }
     }
 
     private static boolean rowHasTracking(Row row, Integer colTracking) {

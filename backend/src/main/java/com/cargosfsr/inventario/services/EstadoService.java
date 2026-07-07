@@ -47,6 +47,7 @@ public class EstadoService {
 
     private final PaqueteRepository paquetes;
     private final PaqueteEstadoHistorialRepository historial;
+    private final PaqueteAuditService auditService;
     private final UsuarioRepository usuarios;
 
     @PersistenceContext
@@ -54,11 +55,13 @@ public class EstadoService {
 
     public EstadoService(PaqueteRepository paquetes,
                          PaqueteEstadoHistorialRepository historial,
+                         PaqueteAuditService auditService,
                          UsuarioRepository usuarios,
                          CurrentUser currentUser) {
         this.currentUser = currentUser;
         this.paquetes = paquetes;
         this.historial = historial;
+        this.auditService = auditService;
         this.usuarios = usuarios;
     }
 
@@ -323,6 +326,8 @@ public class EstadoService {
         """).setParameter("id", h.getId())
           .executeUpdate();
 
+        auditService.registrarCambioEstado(p, anterior != null ? anterior.name() : null, nuevo.name(), auditService.moduloDesdeMotivo(motivo), motivo, user);
+
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("tracking", t);
         out.put("estado_anterior", anterior != null ? anterior.name() : null);
@@ -420,6 +425,8 @@ public class EstadoService {
         String user = actor(changedByIgnored);
         initDbSession(user);
 
+        Paquete antes = paquetes.findByTrackingCode(t).orElseThrow();
+        PaqueteEstado estadoAnterior = antes.getEstado();
         Instant when = (statusAt != null ? statusAt : Instant.now());
         em.createNativeQuery("CALL sp_aplicar_status_externo(?, ?, ?, ?)")
           .setParameter(1, t)
@@ -428,12 +435,18 @@ public class EstadoService {
           .setParameter(4, user)
           .executeUpdate();
 
-        // refrescar paquete (estado pudo cambiar por SP)
+        em.clear();
         Paquete p = paquetes.findByTrackingCode(t).orElseThrow();
         em.createNativeQuery("UPDATE paquetes SET cambio_en_sistema_por = :who WHERE id = :id")
           .setParameter("who", user)
           .setParameter("id", p.getId())
           .executeUpdate();
+
+        if (estadoAnterior != p.getEstado()) {
+            auditService.registrarCambioEstado(p, estadoAnterior != null ? estadoAnterior.name() : null, p.getEstado().name(), "STATUS_EXTERNO", "AUTO: status externo - " + statusExterno, user);
+        } else {
+            auditService.registrar(p.getId(), t, "ACTUALIZACION_STATUS_EXTERNO", "STATUS_EXTERNO", "Se actualizó el status externo del paquete " + t + " desde STATUS_EXTERNO.", "status_externo", null, statusExterno, user, null);
+        }
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("tracking", t);
