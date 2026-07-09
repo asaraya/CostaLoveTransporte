@@ -55,26 +55,15 @@ public class DashboardController {
   }
 
   private int countDistinctEffectiveStateBetween(String estado, Timestamp desde, Timestamp hasta) {
+    String fechaCol = switch (estado) {
+      case ESTADO_POD -> "delivered_at";
+      case ESTADO_NO_ENTREGABLE -> "returned_at";
+      case ESTADO_RECIBIDO, ESTADO_NO_ENTREGADO, ESTADO_SEGUNDO_INTENTO -> "received_at";
+      default -> "last_state_change_at";
+    };
+
     return count(
-        """
-        SELECT COUNT(DISTINCT x.paquete_id)
-        FROM (
-          SELECT
-            h.paquete_id,
-            h.estado_to,
-            CASE
-              WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-              WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
-              WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
-              ELSE h.changed_at
-            END AS effective_at
-          FROM paquete_estado_historial h
-          JOIN paquetes p ON p.id = h.paquete_id
-        ) x
-        WHERE x.estado_to = ?
-          AND x.effective_at >= ?
-          AND x.effective_at < ?
-        """,
+        "SELECT COUNT(*) FROM paquetes WHERE estado = ? AND " + fechaCol + " >= ? AND " + fechaCol + " < ?",
         estado,
         desde,
         hasta);
@@ -84,32 +73,19 @@ public class DashboardController {
       String subtipo, Timestamp desde, Timestamp hasta) {
     return count(
         """
-        SELECT COUNT(DISTINCT x.paquete_id)
-        FROM (
-          SELECT
-            h.paquete_id,
-            h.estado_to,
-            p.devolucion_subtipo,
-            CASE
-              WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-              WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
-              WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
-              ELSE h.changed_at
-            END AS effective_at
-          FROM paquete_estado_historial h
-          JOIN paquetes p ON p.id = h.paquete_id
-        ) x
-        WHERE x.estado_to = 'NO_ENTREGABLE'
-          AND x.devolucion_subtipo = ?
-          AND x.effective_at >= ?
-          AND x.effective_at < ?
+        SELECT COUNT(*)
+          FROM paquetes p
+         WHERE p.estado = 'NO_ENTREGABLE'
+           AND p.devolucion_subtipo = ?
+           AND p.returned_at >= ?
+           AND p.returned_at < ?
         """,
         subtipo,
         desde,
         hasta);
   }
 
-  private Map<String, Integer> snapshotByEstado(Timestamp cutoffExclusivo) {
+  private Map<String, Integer> currentByEstado() {
     Map<String, Integer> out = new LinkedHashMap<>();
     out.put(ESTADO_RECIBIDO, 0);
     out.put(ESTADO_NO_ENTREGADO, 0);
@@ -124,41 +100,13 @@ public class DashboardController {
     List<Map<String, Object>> rows =
         jdbc.queryForList(
             """
-            WITH ranked AS (
-              SELECT
-                x.paquete_id,
-                x.estado_to,
-                x.devolucion_subtipo,
-                ROW_NUMBER() OVER (
-                  PARTITION BY x.paquete_id
-                  ORDER BY x.effective_at DESC, x.id DESC
-                ) AS rn
-              FROM (
-                SELECT
-                  h.id,
-                  h.paquete_id,
-                  h.estado_to,
-                  p.devolucion_subtipo,
-                  CASE
-                    WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-                    WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
-                    WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
-                    ELSE h.changed_at
-                  END AS effective_at
-                FROM paquete_estado_historial h
-                JOIN paquetes p ON p.id = h.paquete_id
-              ) x
-              WHERE x.effective_at < ?
-            )
             SELECT
-              estado_to AS estado,
-              devolucion_subtipo,
+              p.estado AS estado,
+              p.devolucion_subtipo,
               COUNT(*) AS cantidad
-            FROM ranked
-            WHERE rn = 1
-            GROUP BY estado_to, devolucion_subtipo
-            """,
-            cutoffExclusivo);
+            FROM paquetes p
+            GROUP BY p.estado, p.devolucion_subtipo
+            """);
 
     for (Map<String, Object> row : rows) {
       String estado = String.valueOf(row.get("estado"));
@@ -201,7 +149,7 @@ public class DashboardController {
     int noEntregableDosIntentos =
         countDistinctEffectiveReturnSubtypeBetween("DOS_INTENTOS", dIni, dFinExcl);
 
-    Map<String, Integer> snapshot = snapshotByEstado(dFinExcl);
+    Map<String, Integer> snapshot = currentByEstado();
     int recibidosActual = snapshot.getOrDefault(ESTADO_RECIBIDO, 0);
     int noEntregadoDisponibleActual = snapshot.getOrDefault(ESTADO_NO_ENTREGADO, 0);
     int segundoIntentoActual = snapshot.getOrDefault(ESTADO_SEGUNDO_INTENTO, 0);

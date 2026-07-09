@@ -68,26 +68,15 @@ public class ConsultasService {
     }
 
     private long countDistinctEffectiveStateBetween(String estado, Timestamp desde, Timestamp hasta) {
+        String fechaCol = switch (estado) {
+            case ESTADO_POD -> "delivered_at";
+            case ESTADO_NO_ENTREGABLE -> "returned_at";
+            case ESTADO_RECIBIDO, ESTADO_NO_ENTREGADO, ESTADO_SEGUNDO_INTENTO -> "received_at";
+            default -> "last_state_change_at";
+        };
+
         return countLong(
-                """
-                SELECT COUNT(DISTINCT x.paquete_id)
-                FROM (
-                  SELECT
-                    h.paquete_id,
-                    h.estado_to,
-                    CASE
-                      WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-                      WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
-                      WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
-                      ELSE h.changed_at
-                    END AS effective_at
-                  FROM paquete_estado_historial h
-                  JOIN paquetes p ON p.id = h.paquete_id
-                ) x
-                WHERE x.estado_to = ?
-                  AND x.effective_at >= ?
-                  AND x.effective_at < ?
-                """,
+                "SELECT COUNT(*) FROM paquetes WHERE estado = ? AND " + fechaCol + " >= ? AND " + fechaCol + " < ?",
                 estado,
                 desde,
                 hasta);
@@ -96,32 +85,19 @@ public class ConsultasService {
     private long countDistinctEffectiveReturnSubtypeBetween(String subtipo, Timestamp desde, Timestamp hasta) {
         return countLong(
                 """
-                SELECT COUNT(DISTINCT x.paquete_id)
-                FROM (
-                  SELECT
-                    h.paquete_id,
-                    h.estado_to,
-                    p.devolucion_subtipo,
-                    CASE
-                      WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-                      WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
-                      WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
-                      ELSE h.changed_at
-                    END AS effective_at
-                  FROM paquete_estado_historial h
-                  JOIN paquetes p ON p.id = h.paquete_id
-                ) x
-                WHERE x.estado_to = 'NO_ENTREGABLE'
-                  AND x.devolucion_subtipo = ?
-                  AND x.effective_at >= ?
-                  AND x.effective_at < ?
+                SELECT COUNT(*)
+                  FROM paquetes p
+                 WHERE p.estado = 'NO_ENTREGABLE'
+                   AND p.devolucion_subtipo = ?
+                   AND p.returned_at >= ?
+                   AND p.returned_at < ?
                 """,
                 subtipo,
                 desde,
                 hasta);
     }
 
-    private Map<String, Long> snapshotByEstado(Timestamp cutoffExclusivo) {
+    private Map<String, Long> currentByEstado() {
         Map<String, Long> out = new LinkedHashMap<>();
         out.put(ESTADO_RECIBIDO, 0L);
         out.put(ESTADO_NO_ENTREGADO, 0L);
@@ -135,38 +111,10 @@ public class ConsultasService {
 
         List<Map<String, Object>> rows = jdbc.queryForList(
                 """
-                WITH ranked AS (
-                  SELECT
-                    x.paquete_id,
-                    x.estado_to,
-                    x.devolucion_subtipo,
-                    ROW_NUMBER() OVER (
-                      PARTITION BY x.paquete_id
-                      ORDER BY x.effective_at DESC, x.id DESC
-                    ) AS rn
-                  FROM (
-                    SELECT
-                      h.id,
-                      h.paquete_id,
-                      h.estado_to,
-                      p.devolucion_subtipo,
-                      CASE
-                        WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-                        WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
-                        WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
-                        ELSE h.changed_at
-                      END AS effective_at
-                    FROM paquete_estado_historial h
-                    JOIN paquetes p ON p.id = h.paquete_id
-                  ) x
-                  WHERE x.effective_at < ?
-                )
-                SELECT estado_to AS estado, devolucion_subtipo, COUNT(*) AS cantidad
-                FROM ranked
-                WHERE rn = 1
-                GROUP BY estado_to, devolucion_subtipo
-                """,
-                cutoffExclusivo);
+                SELECT p.estado AS estado, p.devolucion_subtipo, COUNT(*) AS cantidad
+                  FROM paquetes p
+                 GROUP BY p.estado, p.devolucion_subtipo
+                """);
 
         for (Map<String, Object> row : rows) {
             String estado = String.valueOf(row.get("estado"));
@@ -592,30 +540,18 @@ public class ConsultasService {
         return countPorDistritoNombre(nombre);
     }
 
-    /**
-     * Reporte diario FLAT (para dashboard).
-     * Definición corregida:
-     * - inventario = snapshot al inicio del día
-     * - recibido = paquetes con received_at dentro del día
-     * - entregado = paquetes con evento POD dentro del día
-     * - no_entregable = paquetes con evento devolución dentro del día
-     * - total = snapshot al cierre del día
-     *
-     * Los snapshots usan el último estado efectivo por paquete antes del corte,
-     * para evitar sobreconteo por múltiples cambios del mismo paquete.
-     */
+    /** Reporte diario FLAT usado por el Dashboard: inventario/total usan estado actual. */
     public Map<String, Object> reporteDiarioFlat(LocalDate fecha) {
         if (fecha == null) return Map.of();
 
         Timestamp dIni = Timestamp.valueOf(fecha.atStartOfDay());
         Timestamp dFin = Timestamp.valueOf(fecha.plusDays(1).atStartOfDay());
 
-        Map<String, Long> snapshotInicio = snapshotByEstado(dIni);
-        Map<String, Long> snapshotCierre = snapshotByEstado(dFin);
+        Map<String, Long> current = currentByEstado();
 
-        long inventarioInicio = snapshotInicio.getOrDefault(ESTADO_RECIBIDO, 0L)
-                + snapshotInicio.getOrDefault(ESTADO_NO_ENTREGADO, 0L)
-                + snapshotInicio.getOrDefault(ESTADO_SEGUNDO_INTENTO, 0L);
+        long inventarioActual = current.getOrDefault(ESTADO_RECIBIDO, 0L)
+                + current.getOrDefault(ESTADO_NO_ENTREGADO, 0L)
+                + current.getOrDefault(ESTADO_SEGUNDO_INTENTO, 0L);
 
         long recibido = countReceivedBetween(dIni, dFin);
         long entregado = countDistinctEffectiveStateBetween(ESTADO_POD, dIni, dFin);
@@ -625,13 +561,9 @@ public class ConsultasService {
         long vencidos = countDistinctEffectiveReturnSubtypeBetween("VENCIDOS", dIni, dFin);
         long dosIntentos = countDistinctEffectiveReturnSubtypeBetween("DOS_INTENTOS", dIni, dFin);
 
-        long inventarioCierre = snapshotCierre.getOrDefault(ESTADO_RECIBIDO, 0L)
-                + snapshotCierre.getOrDefault(ESTADO_NO_ENTREGADO, 0L)
-                + snapshotCierre.getOrDefault(ESTADO_SEGUNDO_INTENTO, 0L);
-
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("fecha", fecha.toString());
-        out.put("inventario", inventarioInicio);
+        out.put("inventario", inventarioActual);
         out.put("recibido", recibido);
         out.put("entregado", entregado);
         out.put("no_entregable", noEntregable);
@@ -639,7 +571,7 @@ public class ConsultasService {
         out.put("vencidos", vencidos);
         out.put("dos_intentos", dosIntentos);
         out.put("tr_a_ca", trACa);
-        out.put("total", inventarioCierre);
+        out.put("total", inventarioActual);
         return out;
     }
 }
