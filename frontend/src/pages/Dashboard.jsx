@@ -106,9 +106,9 @@ export default function Dashboard() {
   })
   const [pfLoading, setPfLoading] = useState(false)
 
-  const cargarTopDistritos = async () => {
+  const cargarTopDistritos = async (fechaArg = fecha) => {
     try {
-      const { data } = await api.get('/dashboard/top-distritos', { params: { limit: 100000 } })
+      const { data } = await api.get('/dashboard/top-distritos', { params: { limit: 500, fecha: fechaArg } })
       const arr = Array.isArray(data) ? data : []
       const normalized = arr
         .map((r) => ({
@@ -128,9 +128,9 @@ export default function Dashboard() {
     }
   }
 
-  const cargarTopUbicaciones = async () => {
+  const cargarTopUbicaciones = async (fechaArg = fecha) => {
     try {
-      const { data } = await api.get('/dashboard/top-ubicaciones', { params: { limit: 100000 } })
+      const { data } = await api.get('/dashboard/top-ubicaciones', { params: { limit: 500, fecha: fechaArg } })
       const arr = Array.isArray(data) ? data : []
       const normalized = arr
         .map((r) => ({
@@ -154,69 +154,28 @@ export default function Dashboard() {
   const cargarFecha = async () => {
     setLoading(true)
     try {
-      const [s, t, m] = await Promise.all([
-        api.get('/dashboard/summary', { params: { fecha } }),
-        api.get('/dashboard/top-transportistas', { params: { limit: 100000 } }),
-        api.get('/dashboard/ultimos-movimientos', { params: { fecha, limit: 100000 } }),
-      ])
-
+      const s = await api.get('/dashboard/summary', { params: { fecha } })
       setSummary(s.data)
-
-      const tArr = Array.isArray(t.data) ? t.data : []
-      const tNorm = tArr.map(x => ({
-        mensajero_id: Number(x?.mensajero_id ?? x?.mensajeroId ?? 0) || 0,
-        transportista: x?.transportista ?? x?.full_name ?? x?.nombre ?? '',
-        cantidad: Number(x?.cantidad ?? x?.total ?? x?.count ?? 0) || 0,
-      })).filter(x => x.transportista && x.mensajero_id)
-
-      tNorm.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0) || String(a.transportista).localeCompare(String(b.transportista)))
-      setTopTransportistas(tNorm)
-
-      const movSrc = Array.isArray(m.data) ? m.data : []
-      const movHoy = movSrc.sort((a, b) => {
-        const da = new Date(movFechaOficial(a) ?? 0).getTime()
-        const db = new Date(movFechaOficial(b) ?? 0).getTime()
-        return db - da
-      })
-      setUltimosMov(movHoy)
-    } catch (e) {
-      alert(e?.response?.data?.message || e?.message || 'Error')
-    } finally {
       setLoading(false)
-    }
-  }
 
-  const cargarTodo = async () => {
-    setLoading(true)
-    try {
-      const [s, u, ub, t, m] = await Promise.all([
-        api.get('/dashboard/summary', { params: { fecha } }),
-        api.get('/dashboard/top-distritos', { params: { limit: 100000 } }),
-        api.get('/dashboard/top-ubicaciones', { params: { limit: 100000 } }),
-        api.get('/dashboard/top-transportistas', { params: { limit: 100000 } }),
-        api.get('/dashboard/ultimos-movimientos', { params: { fecha, limit: 100000 } }),
+      const [d, u, t, m] = await Promise.all([
+        api.get('/dashboard/top-distritos', { params: { limit: 500, fecha } }),
+        api.get('/dashboard/top-ubicaciones', { params: { limit: 500, fecha } }),
+        api.get('/dashboard/top-transportistas', { params: { limit: 500, fecha } }),
+        api.get('/dashboard/ultimos-movimientos', { params: { fecha, limit: 200 } }),
       ])
 
-      setSummary(s.data)
-
-      const arr = Array.isArray(u.data) ? u.data : []
-      const normalized = arr
+      const dArr = Array.isArray(d.data) ? d.data : []
+      const dNorm = dArr
         .map((r) => ({
-          distrito:
-            r?.distrito ??
-            r?.distrito_nombre ??
-            r?.ubicacion ??
-            r?.ubicacion_codigo ??
-            r?.nombre ??
-            '',
+          distrito: r?.distrito ?? r?.distrito_nombre ?? r?.nombre ?? '',
           cantidad: Number(r?.cantidad ?? r?.total ?? r?.count ?? 0) || 0,
         }))
         .filter((x) => x.distrito)
+      dNorm.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0))
+      setTopDistritos(dNorm)
 
-      normalized.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0))
-      setTopDistritos(normalized)
-
-      const ubArr = Array.isArray(ub.data) ? ub.data : []
+      const ubArr = Array.isArray(u.data) ? u.data : []
       const ubNorm = ubArr.map(r => ({
         ubicacion: r?.ubicacion ?? r?.ubicacion_codigo ?? r?.codigo ?? r?.nombre ?? '',
         cantidad: Number(r?.cantidad ?? r?.total ?? r?.count ?? 0) || 0,
@@ -230,7 +189,6 @@ export default function Dashboard() {
         transportista: x?.transportista ?? x?.full_name ?? x?.nombre ?? '',
         cantidad: Number(x?.cantidad ?? x?.total ?? x?.count ?? 0) || 0,
       })).filter(x => x.transportista && x.mensajero_id)
-
       tNorm.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0) || String(a.transportista).localeCompare(String(b.transportista)))
       setTopTransportistas(tNorm)
 
@@ -247,6 +205,12 @@ export default function Dashboard() {
       setLoading(false)
     }
   }
+
+
+  const cargarTodo = async () => {
+    await cargarFecha()
+  }
+
 
   const cargarMatrizMes = async () => {
     if (!mesResumen) return
@@ -366,12 +330,6 @@ export default function Dashboard() {
     }
   }
 
-  useEffect(() => {
-    cargarMatrizMes()
-  }, [mesResumen])
-
-  useEffect(() => { cargarTopDistritos() }, [])
-  useEffect(() => { cargarTopUbicaciones() }, [])
   useEffect(() => { cargarFecha() }, [fecha])
 
   const openDistritoModal = async (distrito) => {
@@ -428,7 +386,7 @@ export default function Dashboard() {
     setTransModal({ open: true, mensajeroId, transportista, rows: [], loading: true, error: null })
     try {
       const { data } = await api.get('/dashboard/pods-transportista', {
-        params: { mensajeroId, limit: 100000 }
+        params: { mensajeroId, limit: 500, fecha }
       })
       const arr = Array.isArray(data) ? data : []
       const rows = arr.sort((a, b) => new Date(b?.delivered_at ?? 0).getTime() - new Date(a?.delivered_at ?? 0).getTime())
@@ -506,7 +464,7 @@ export default function Dashboard() {
   })()
 
   const currentPFDateKey = 'received_at'
-  const inventarioRealHoy = summary ? calcInventarioDesdeByEstado(summary.byEstado) : 0
+  const inventarioRealHoy = summary ? Number(summary.inventarioFecha ?? summary.inventarioActual ?? calcInventarioDesdeByEstado(summary.byEstado) ?? 0) : 0
   const trACaActual = summary ? countEstadoDesdeByEstado(summary.byEstado, 'TR_A_CA') : 0
   const fmtCell = (v) => (v === null || v === undefined || v === '' ? '-' : v)
 
@@ -527,7 +485,7 @@ export default function Dashboard() {
       {summary && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 12 }}>
           <Kpi title="Paquetes totales" value={summary.totales?.paquetes ?? summary.totalPaquetes ?? 0} />
-          <Kpi title="En inventario" value={inventarioRealHoy ?? 0} />
+          <Kpi title={`En inventario al cierre de ${summary.fecha ?? fecha}`} value={inventarioRealHoy ?? 0} />
           <Kpi title="TR a CA" value={trACaActual ?? 0} />
         </div>
       )}
@@ -559,7 +517,7 @@ export default function Dashboard() {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
         <div>
-          <h4>Paquetes por distrito</h4>
+          <h4>Paquetes por distrito al cierre de la fecha</h4>
 
           <table border="1" cellPadding="6" width="100%">
             <thead><tr><th>Distrito</th><th>Cantidad</th></tr></thead>
@@ -722,7 +680,7 @@ export default function Dashboard() {
             />
           </label>
           <button onClick={cargarMatrizMes} disabled={loadingMes || !mesResumen}>
-            {loadingMes ? 'Cargando…' : 'Ver mes'}
+            {loadingMes ? 'Cargando…' : 'Cargar / actualizar mes'}
           </button>
         </div>
 

@@ -42,10 +42,14 @@ public class DashboardController {
     return Timestamp.valueOf(fecha.plusDays(1).atStartOfDay());
   }
 
+  private int safeLimit(int limit, int max) {
+    return Math.max(1, Math.min(limit, max));
+  }
+
   private int countReceivedBetween(Timestamp desde, Timestamp hasta) {
     return count(
         """
-        SELECT COUNT(*)
+        SELECT COUNT(DISTINCT COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)))
         FROM paquetes p
         WHERE p.received_at >= ?
           AND p.received_at < ?
@@ -55,15 +59,27 @@ public class DashboardController {
   }
 
   private int countDistinctEffectiveStateBetween(String estado, Timestamp desde, Timestamp hasta) {
-    String fechaCol = switch (estado) {
-      case ESTADO_POD -> "delivered_at";
-      case ESTADO_NO_ENTREGABLE -> "returned_at";
-      case ESTADO_RECIBIDO, ESTADO_NO_ENTREGADO, ESTADO_SEGUNDO_INTENTO -> "received_at";
-      default -> "last_state_change_at";
-    };
-
     return count(
-        "SELECT COUNT(*) FROM paquetes WHERE estado = ? AND " + fechaCol + " >= ? AND " + fechaCol + " < ?",
+        """
+        SELECT COUNT(DISTINCT x.tracking_key)
+        FROM (
+          SELECT
+            h.paquete_id,
+            COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)) AS tracking_key,
+            h.estado_to,
+            CASE
+              WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
+              WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
+              WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
+              ELSE h.changed_at
+            END AS effective_at
+          FROM paquete_estado_historial h
+          JOIN paquetes p ON p.id = h.paquete_id
+        ) x
+        WHERE x.estado_to = ?
+          AND x.effective_at >= ?
+          AND x.effective_at < ?
+        """,
         estado,
         desde,
         hasta);
@@ -73,19 +89,83 @@ public class DashboardController {
       String subtipo, Timestamp desde, Timestamp hasta) {
     return count(
         """
-        SELECT COUNT(*)
-          FROM paquetes p
-         WHERE p.estado = 'NO_ENTREGABLE'
-           AND p.devolucion_subtipo = ?
-           AND p.returned_at >= ?
-           AND p.returned_at < ?
+        SELECT COUNT(DISTINCT x.tracking_key)
+        FROM (
+          SELECT
+            h.paquete_id,
+            COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)) AS tracking_key,
+            h.estado_to,
+            p.devolucion_subtipo,
+            CASE
+              WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
+              WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
+              WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
+              ELSE h.changed_at
+            END AS effective_at
+          FROM paquete_estado_historial h
+          JOIN paquetes p ON p.id = h.paquete_id
+        ) x
+        WHERE x.estado_to = 'NO_ENTREGABLE'
+          AND x.devolucion_subtipo = ?
+          AND x.effective_at >= ?
+          AND x.effective_at < ?
         """,
         subtipo,
         desde,
         hasta);
   }
 
-  private Map<String, Integer> currentByEstado() {
+  private static final String SNAPSHOT_CTE = """
+      WITH event_rows AS (
+        SELECT
+          h.id AS orden_id,
+          h.paquete_id,
+          COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)) AS tracking_key,
+          h.estado_to,
+          p.devolucion_subtipo,
+          CASE
+            WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
+            WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
+            WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
+            ELSE h.changed_at
+          END AS effective_at
+        FROM paquete_estado_historial h
+        JOIN paquetes p ON p.id = h.paquete_id
+        UNION ALL
+        SELECT
+          0 AS orden_id,
+          p.id AS paquete_id,
+          COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)) AS tracking_key,
+          p.estado AS estado_to,
+          p.devolucion_subtipo,
+          CASE
+            WHEN p.estado = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
+            WHEN p.estado = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
+            WHEN p.estado IN ('ENTREGADO_A_TRANSPORTISTA_LOCAL', 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE', 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO') AND p.received_at IS NOT NULL THEN p.received_at
+            ELSE p.last_state_change_at
+          END AS effective_at
+        FROM paquetes p
+        WHERE NOT EXISTS (
+          SELECT 1 FROM paquete_estado_historial h2 WHERE h2.paquete_id = p.id
+        )
+      ),
+      ranked AS (
+        SELECT
+          x.paquete_id,
+          x.tracking_key,
+          x.estado_to,
+          x.devolucion_subtipo,
+          ROW_NUMBER() OVER (
+            PARTITION BY x.tracking_key
+            ORDER BY x.effective_at DESC, x.orden_id DESC, x.paquete_id DESC
+          ) AS rn
+        FROM event_rows x
+        WHERE x.effective_at IS NOT NULL
+          AND x.effective_at < ?
+      )
+      """;
+
+  private Map<String, Integer> snapshotByEstado(Timestamp cutoffExclusivo) {
     Map<String, Integer> out = new LinkedHashMap<>();
     out.put(ESTADO_RECIBIDO, 0);
     out.put(ESTADO_NO_ENTREGADO, 0);
@@ -97,16 +177,17 @@ public class DashboardController {
     out.put("NO_ENTREGABLE__VENCIDOS", 0);
     out.put("NO_ENTREGABLE__DOS_INTENTOS", 0);
 
-    List<Map<String, Object>> rows =
-        jdbc.queryForList(
-            """
-            SELECT
-              p.estado AS estado,
-              p.devolucion_subtipo,
-              COUNT(*) AS cantidad
-            FROM paquetes p
-            GROUP BY p.estado, p.devolucion_subtipo
-            """);
+    List<Map<String, Object>> rows = jdbc.queryForList(
+        SNAPSHOT_CTE + """
+        SELECT
+          estado_to AS estado,
+          devolucion_subtipo,
+          COUNT(*) AS cantidad
+        FROM ranked
+        WHERE rn = 1
+        GROUP BY estado_to, devolucion_subtipo
+        """,
+        cutoffExclusivo);
 
     for (Map<String, Object> row : rows) {
       String estado = String.valueOf(row.get("estado"));
@@ -138,25 +219,23 @@ public class DashboardController {
     Timestamp dIni = startOfDay(d);
     Timestamp dFinExcl = startOfNextDay(d);
 
-    int totalPaquetesSistema = count("SELECT COUNT(*) FROM paquetes");
+    int totalPaquetesSistema = count("SELECT COUNT(DISTINCT COALESCE(NULLIF(TRIM(tracking_code), ''), CONCAT('#ID:', id))) FROM paquetes");
     int recibidosFecha = countReceivedBetween(dIni, dFinExcl);
     int entregadosFecha = countDistinctEffectiveStateBetween(ESTADO_POD, dIni, dFinExcl);
     int noEntregableFecha = countDistinctEffectiveStateBetween(ESTADO_NO_ENTREGABLE, dIni, dFinExcl);
     int trACaFecha = countDistinctEffectiveStateBetween(ESTADO_TR_A_CA, dIni, dFinExcl);
-    int noEntregableFueraDeRuta =
-        countDistinctEffectiveReturnSubtypeBetween("FUERA_DE_RUTA", dIni, dFinExcl);
+    int noEntregableFueraDeRuta = countDistinctEffectiveReturnSubtypeBetween("FUERA_DE_RUTA", dIni, dFinExcl);
     int noEntregableVencidos = countDistinctEffectiveReturnSubtypeBetween("VENCIDOS", dIni, dFinExcl);
-    int noEntregableDosIntentos =
-        countDistinctEffectiveReturnSubtypeBetween("DOS_INTENTOS", dIni, dFinExcl);
+    int noEntregableDosIntentos = countDistinctEffectiveReturnSubtypeBetween("DOS_INTENTOS", dIni, dFinExcl);
 
-    Map<String, Integer> snapshot = currentByEstado();
+    Map<String, Integer> snapshot = snapshotByEstado(dFinExcl);
     int recibidosActual = snapshot.getOrDefault(ESTADO_RECIBIDO, 0);
     int noEntregadoDisponibleActual = snapshot.getOrDefault(ESTADO_NO_ENTREGADO, 0);
     int segundoIntentoActual = snapshot.getOrDefault(ESTADO_SEGUNDO_INTENTO, 0);
     int entregadosActual = snapshot.getOrDefault(ESTADO_POD, 0);
     int noEntregableActual = snapshot.getOrDefault(ESTADO_NO_ENTREGABLE, 0);
     int trACaActual = snapshot.getOrDefault(ESTADO_TR_A_CA, 0);
-    int inventarioActual = recibidosActual + noEntregadoDisponibleActual + segundoIntentoActual;
+    int inventarioFecha = recibidosActual + noEntregadoDisponibleActual + segundoIntentoActual;
 
     int totalSacos = count("SELECT COUNT(*) FROM sacos");
     int sacosAbiertos = count("SELECT COUNT(*) FROM sacos WHERE closed_at IS NULL");
@@ -169,14 +248,9 @@ public class DashboardController {
     byEstado.add(estadoRow(ESTADO_POD, entregadosActual));
     byEstado.add(estadoRow(ESTADO_NO_ENTREGABLE, noEntregableActual));
     byEstado.add(estadoRow(ESTADO_TR_A_CA, trACaActual));
-    byEstado.add(
-        estadoRow(
-            "NO_ENTREGABLE__FUERA_DE_RUTA", snapshot.getOrDefault("NO_ENTREGABLE__FUERA_DE_RUTA", 0)));
-    byEstado.add(
-        estadoRow("NO_ENTREGABLE__VENCIDOS", snapshot.getOrDefault("NO_ENTREGABLE__VENCIDOS", 0)));
-    byEstado.add(
-        estadoRow(
-            "NO_ENTREGABLE__DOS_INTENTOS", snapshot.getOrDefault("NO_ENTREGABLE__DOS_INTENTOS", 0)));
+    byEstado.add(estadoRow("NO_ENTREGABLE__FUERA_DE_RUTA", snapshot.getOrDefault("NO_ENTREGABLE__FUERA_DE_RUTA", 0)));
+    byEstado.add(estadoRow("NO_ENTREGABLE__VENCIDOS", snapshot.getOrDefault("NO_ENTREGABLE__VENCIDOS", 0)));
+    byEstado.add(estadoRow("NO_ENTREGABLE__DOS_INTENTOS", snapshot.getOrDefault("NO_ENTREGABLE__DOS_INTENTOS", 0)));
 
     Map<String, Object> out = new LinkedHashMap<>();
     out.put("fecha", d.toString());
@@ -205,71 +279,80 @@ public class DashboardController {
     hoy.put("tr_a_ca", trACaFecha);
     out.put("hoy", hoy);
 
-    out.put("inventarioActual", inventarioActual);
+    out.put("inventarioActual", inventarioFecha);
+    out.put("inventarioFecha", inventarioFecha);
     out.put("byEstado", byEstado);
     return out;
   }
 
   @GetMapping("/top-ubicaciones")
-  public List<Map<String, Object>> topUbicaciones(@RequestParam(value = "limit", defaultValue = "10") int limit) {
-    String sql =
-        """
-        SELECT v.ubicacion_codigo AS ubicacion, COUNT(*) AS cantidad
-        FROM vw_paquete_resumen v
-        WHERE v.estado IN (
-          'ENTREGADO_A_TRANSPORTISTA_LOCAL',
-          'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
-          'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'
-        )
-        GROUP BY v.ubicacion_codigo
+  public List<Map<String, Object>> topUbicaciones(
+      @RequestParam(value = "limit", defaultValue = "100") int limit,
+      @RequestParam(value = "fecha", required = false) String fecha) {
+    int lim = safeLimit(limit, 500);
+    LocalDate d = (fecha == null || fecha.isBlank()) ? LocalDate.now() : LocalDate.parse(fecha);
+    Timestamp cutoff = startOfNextDay(d);
+
+    String sql = SNAPSHOT_CTE + """
+        SELECT COALESCE(v.ubicacion_codigo, 'SIN_UBICACION') AS ubicacion, COUNT(*) AS cantidad
+        FROM ranked r
+        JOIN vw_paquete_resumen v ON v.id = r.paquete_id
+        WHERE r.rn = 1
+          AND r.estado_to IN (
+            'ENTREGADO_A_TRANSPORTISTA_LOCAL',
+            'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
+            'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'
+          )
+        GROUP BY COALESCE(v.ubicacion_codigo, 'SIN_UBICACION')
         ORDER BY cantidad DESC, ubicacion ASC
         LIMIT ?
         """;
-    return jdbc.query(
-        sql,
-        (rs, i) -> {
-          Map<String, Object> m = new LinkedHashMap<>();
-          m.put("ubicacion", rs.getString("ubicacion"));
-          m.put("cantidad", rs.getInt("cantidad"));
-          return m;
-        },
-        limit);
+    return jdbc.query(sql, (rs, i) -> {
+      Map<String, Object> m = new LinkedHashMap<>();
+      m.put("ubicacion", rs.getString("ubicacion"));
+      m.put("cantidad", rs.getInt("cantidad"));
+      return m;
+    }, cutoff, lim);
   }
 
   @GetMapping("/top-distritos")
-  public List<Map<String, Object>> topDistritos(@RequestParam(value = "limit", defaultValue = "10") int limit) {
-    String sql =
-        """
-        SELECT v.distrito_nombre AS distrito, COUNT(*) AS cantidad
-        FROM vw_paquete_resumen v
-        WHERE v.estado IN (
-          'ENTREGADO_A_TRANSPORTISTA_LOCAL',
-          'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
-          'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'
-        )
-        GROUP BY v.distrito_nombre
+  public List<Map<String, Object>> topDistritos(
+      @RequestParam(value = "limit", defaultValue = "100") int limit,
+      @RequestParam(value = "fecha", required = false) String fecha) {
+    int lim = safeLimit(limit, 500);
+    LocalDate d = (fecha == null || fecha.isBlank()) ? LocalDate.now() : LocalDate.parse(fecha);
+    Timestamp cutoff = startOfNextDay(d);
+
+    String sql = SNAPSHOT_CTE + """
+        SELECT COALESCE(v.distrito_nombre, 'SIN_DISTRITO') AS distrito, COUNT(*) AS cantidad
+        FROM ranked r
+        JOIN vw_paquete_resumen v ON v.id = r.paquete_id
+        WHERE r.rn = 1
+          AND r.estado_to IN (
+            'ENTREGADO_A_TRANSPORTISTA_LOCAL',
+            'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
+            'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'
+          )
+        GROUP BY COALESCE(v.distrito_nombre, 'SIN_DISTRITO')
         ORDER BY cantidad DESC, distrito ASC
         LIMIT ?
         """;
-    return jdbc.query(
-        sql,
-        (rs, i) -> {
-          Map<String, Object> m = new LinkedHashMap<>();
-          m.put("distrito", rs.getString("distrito"));
-          m.put("cantidad", rs.getInt("cantidad"));
-          return m;
-        },
-        limit);
+    return jdbc.query(sql, (rs, i) -> {
+      Map<String, Object> m = new LinkedHashMap<>();
+      m.put("distrito", rs.getString("distrito"));
+      m.put("cantidad", rs.getInt("cantidad"));
+      return m;
+    }, cutoff, lim);
   }
 
   @GetMapping("/top-transportistas")
   public List<Map<String, Object>> topTransportistas(
-      @RequestParam(value = "limit", defaultValue = "10") int limit,
+      @RequestParam(value = "limit", defaultValue = "100") int limit,
       @RequestParam(value = "fecha", required = false) String fecha) {
+    int lim = safeLimit(limit, 500);
 
     if (fecha == null || fecha.isBlank()) {
-      String sql =
-          """
+      String sql = """
           SELECT u.id AS mensajero_id,
                 u.full_name AS transportista,
                 COALESCE(COUNT(DISTINCT p.id), 0) AS cantidad
@@ -283,24 +366,14 @@ public class DashboardController {
           LIMIT ?
           """;
 
-      return jdbc.query(
-          sql,
-          (rs, i) -> {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("mensajero_id", rs.getLong("mensajero_id"));
-            m.put("transportista", rs.getString("transportista"));
-            m.put("cantidad", rs.getInt("cantidad"));
-            return m;
-          },
-          limit);
+      return jdbc.query(sql, (rs, i) -> mapTransportista(rs), lim);
     }
 
     LocalDate d = LocalDate.parse(fecha);
     Timestamp dIni = startOfDay(d);
     Timestamp dFinExcl = startOfNextDay(d);
 
-    String sql =
-        """
+    String sql = """
         WITH pod_rows AS (
           SELECT
             h.paquete_id,
@@ -348,29 +421,26 @@ public class DashboardController {
         LIMIT ?
         """;
 
-    return jdbc.query(
-        sql,
-        (rs, i) -> {
-          Map<String, Object> m = new LinkedHashMap<>();
-          m.put("mensajero_id", rs.getLong("mensajero_id"));
-          m.put("transportista", rs.getString("transportista"));
-          m.put("cantidad", rs.getInt("cantidad"));
-          return m;
-        },
-        dIni,
-        dFinExcl,
-        limit);
+    return jdbc.query(sql, (rs, i) -> mapTransportista(rs), dIni, dFinExcl, lim);
+  }
+
+  private Map<String, Object> mapTransportista(java.sql.ResultSet rs) throws java.sql.SQLException {
+    Map<String, Object> m = new LinkedHashMap<>();
+    m.put("mensajero_id", rs.getLong("mensajero_id"));
+    m.put("transportista", rs.getString("transportista"));
+    m.put("cantidad", rs.getInt("cantidad"));
+    return m;
   }
 
   @GetMapping("/pods-transportista")
   public List<Map<String, Object>> podsPorTransportista(
       @RequestParam("mensajeroId") long mensajeroId,
-      @RequestParam(value = "limit", defaultValue = "100000") int limit,
+      @RequestParam(value = "limit", defaultValue = "200") int limit,
       @RequestParam(value = "fecha", required = false) String fecha) {
+    int lim = safeLimit(limit, 500);
 
     if (fecha == null || fecha.isBlank()) {
-      String sql =
-          """
+      String sql = """
           SELECT p.id,
                 p.tracking_code,
                 s.marchamo,
@@ -389,31 +459,14 @@ public class DashboardController {
           LIMIT ?
           """;
 
-      return jdbc.query(
-          sql,
-          (rs, i) -> {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("id", rs.getLong("id"));
-            m.put("tracking_code", rs.getString("tracking_code"));
-            m.put("marchamo", rs.getString("marchamo"));
-            m.put("distrito_nombre", rs.getString("distrito_nombre"));
-            m.put("estado", rs.getString("estado"));
-            m.put("delivered_at", rs.getTimestamp("delivered_at"));
-            m.put("recipient_name", rs.getString("recipient_name"));
-            m.put("recipient_phone", rs.getString("recipient_phone"));
-            m.put("recipient_address", rs.getString("recipient_address"));
-            return m;
-          },
-          mensajeroId,
-          limit);
+      return jdbc.query(sql, (rs, i) -> mapPod(rs), mensajeroId, lim);
     }
 
     LocalDate d = LocalDate.parse(fecha);
     Timestamp dIni = startOfDay(d);
     Timestamp dFinExcl = startOfNextDay(d);
 
-    String sql =
-        """
+    String sql = """
         WITH pod_rows AS (
           SELECT
             h.id AS hist_id,
@@ -468,34 +521,30 @@ public class DashboardController {
         LIMIT ?
         """;
 
-    return jdbc.query(
-        sql,
-        (rs, i) -> {
-          Map<String, Object> m = new LinkedHashMap<>();
-          m.put("id", rs.getLong("id"));
-          m.put("tracking_code", rs.getString("tracking_code"));
-          m.put("marchamo", rs.getString("marchamo"));
-          m.put("distrito_nombre", rs.getString("distrito_nombre"));
-          m.put("estado", rs.getString("estado"));
-          m.put("delivered_at", rs.getTimestamp("delivered_at"));
-          m.put("recipient_name", rs.getString("recipient_name"));
-          m.put("recipient_phone", rs.getString("recipient_phone"));
-          m.put("recipient_address", rs.getString("recipient_address"));
-          return m;
-        },
-        mensajeroId,
-        dIni,
-        dFinExcl,
-        limit);
+    return jdbc.query(sql, (rs, i) -> mapPod(rs), mensajeroId, dIni, dFinExcl, lim);
+  }
+
+  private Map<String, Object> mapPod(java.sql.ResultSet rs) throws java.sql.SQLException {
+    Map<String, Object> m = new LinkedHashMap<>();
+    m.put("id", rs.getLong("id"));
+    m.put("tracking_code", rs.getString("tracking_code"));
+    m.put("marchamo", rs.getString("marchamo"));
+    m.put("distrito_nombre", rs.getString("distrito_nombre"));
+    m.put("estado", rs.getString("estado"));
+    m.put("delivered_at", rs.getTimestamp("delivered_at"));
+    m.put("recipient_name", rs.getString("recipient_name"));
+    m.put("recipient_phone", rs.getString("recipient_phone"));
+    m.put("recipient_address", rs.getString("recipient_address"));
+    return m;
   }
 
   @GetMapping("/ultimos-movimientos")
   public List<Map<String, Object>> ultimosMovimientos(
       @RequestParam(value = "limit", defaultValue = "20") int limit,
       @RequestParam(value = "fecha", required = false) String fecha) {
+    int lim = safeLimit(limit, 200);
 
-    String base =
-        """
+    String base = """
         SELECT h.id AS hist_id, p.tracking_code, v.marchamo, v.distrito_nombre, v.ubicacion_codigo,
                h.estado_from, h.estado_to, h.changed_at, p.received_at, p.delivered_at, p.returned_at,
                h.motivo, h.changed_by
@@ -508,72 +557,46 @@ public class DashboardController {
 
     if (fecha == null || fecha.isBlank()) {
       String sql = base + "\n" + orderLimit;
-      return jdbc.query(
-          sql,
-          (rs, i) -> {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("hist_id", rs.getLong("hist_id"));
-            m.put("tracking_code", rs.getString("tracking_code"));
-            m.put("marchamo", rs.getString("marchamo"));
-            m.put("distrito_nombre", rs.getString("distrito_nombre"));
-            m.put("ubicacion_codigo", rs.getString("ubicacion_codigo"));
-            m.put("estado_from", rs.getString("estado_from"));
-            m.put("estado_to", rs.getString("estado_to"));
-            m.put("changed_at", rs.getTimestamp("changed_at"));
-            m.put("received_at", rs.getTimestamp("received_at"));
-            m.put("delivered_at", rs.getTimestamp("delivered_at"));
-            m.put("returned_at", rs.getTimestamp("returned_at"));
-            m.put("motivo", rs.getString("motivo"));
-            m.put("changed_by", rs.getString("changed_by"));
-            return m;
-          },
-          limit);
+      return jdbc.query(sql, (rs, i) -> mapMovimiento(rs), lim);
     }
 
     LocalDate d = LocalDate.parse(fecha);
     Timestamp dIni = startOfDay(d);
     Timestamp dFinExcl = startOfNextDay(d);
 
-    String sql =
-        base
-            + """
-            WHERE CASE
-              WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-              WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
-              WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
-              ELSE h.changed_at
-            END >= ?
-            AND CASE
-              WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-              WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
-              WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
-              ELSE h.changed_at
-            END < ?
-            """
-            + "\n"
-            + orderLimit;
+    String sql = base + """
+        WHERE CASE
+          WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
+          WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
+          WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
+          ELSE h.changed_at
+        END >= ?
+        AND CASE
+          WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
+          WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
+          WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
+          ELSE h.changed_at
+        END < ?
+        """ + "\n" + orderLimit;
 
-    return jdbc.query(
-        sql,
-        (rs, i) -> {
-          Map<String, Object> m = new LinkedHashMap<>();
-          m.put("hist_id", rs.getLong("hist_id"));
-          m.put("tracking_code", rs.getString("tracking_code"));
-          m.put("marchamo", rs.getString("marchamo"));
-          m.put("distrito_nombre", rs.getString("distrito_nombre"));
-          m.put("ubicacion_codigo", rs.getString("ubicacion_codigo"));
-          m.put("estado_from", rs.getString("estado_from"));
-          m.put("estado_to", rs.getString("estado_to"));
-          m.put("changed_at", rs.getTimestamp("changed_at"));
-          m.put("received_at", rs.getTimestamp("received_at"));
-          m.put("delivered_at", rs.getTimestamp("delivered_at"));
-          m.put("returned_at", rs.getTimestamp("returned_at"));
-          m.put("motivo", rs.getString("motivo"));
-          m.put("changed_by", rs.getString("changed_by"));
-          return m;
-        },
-        dIni,
-        dFinExcl,
-        limit);
+    return jdbc.query(sql, (rs, i) -> mapMovimiento(rs), dIni, dFinExcl, lim);
+  }
+
+  private Map<String, Object> mapMovimiento(java.sql.ResultSet rs) throws java.sql.SQLException {
+    Map<String, Object> m = new LinkedHashMap<>();
+    m.put("hist_id", rs.getLong("hist_id"));
+    m.put("tracking_code", rs.getString("tracking_code"));
+    m.put("marchamo", rs.getString("marchamo"));
+    m.put("distrito_nombre", rs.getString("distrito_nombre"));
+    m.put("ubicacion_codigo", rs.getString("ubicacion_codigo"));
+    m.put("estado_from", rs.getString("estado_from"));
+    m.put("estado_to", rs.getString("estado_to"));
+    m.put("changed_at", rs.getTimestamp("changed_at"));
+    m.put("received_at", rs.getTimestamp("received_at"));
+    m.put("delivered_at", rs.getTimestamp("delivered_at"));
+    m.put("returned_at", rs.getTimestamp("returned_at"));
+    m.put("motivo", rs.getString("motivo"));
+    m.put("changed_by", rs.getString("changed_by"));
+    return m;
   }
 }
