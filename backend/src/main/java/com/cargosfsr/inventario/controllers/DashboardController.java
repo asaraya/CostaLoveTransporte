@@ -59,6 +59,30 @@ public class DashboardController {
   }
 
   private int countDistinctEffectiveStateBetween(String estado, Timestamp desde, Timestamp hasta) {
+    if (ESTADO_POD.equals(estado)) {
+      return count(
+          """
+          SELECT COUNT(DISTINCT COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)))
+          FROM paquetes p
+          WHERE p.delivered_at >= ?
+            AND p.delivered_at < ?
+          """,
+          desde,
+          hasta);
+    }
+
+    if (ESTADO_NO_ENTREGABLE.equals(estado)) {
+      return count(
+          """
+          SELECT COUNT(DISTINCT COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)))
+          FROM paquetes p
+          WHERE p.returned_at >= ?
+            AND p.returned_at < ?
+          """,
+          desde,
+          hasta);
+    }
+
     return count(
         """
         SELECT COUNT(DISTINCT x.tracking_key)
@@ -67,14 +91,11 @@ public class DashboardController {
             h.paquete_id,
             COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)) AS tracking_key,
             h.estado_to,
-            CASE
-              WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-              WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
-              WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
-              ELSE h.changed_at
-            END AS effective_at
+            h.changed_at AS effective_at
           FROM paquete_estado_historial h
           JOIN paquetes p ON p.id = h.paquete_id
+          WHERE (h.estado_from IS NULL OR h.estado_from <> h.estado_to)
+            AND (p.received_at IS NULL OR h.changed_at >= p.received_at)
         ) x
         WHERE x.estado_to = ?
           AND x.effective_at >= ?
@@ -89,26 +110,11 @@ public class DashboardController {
       String subtipo, Timestamp desde, Timestamp hasta) {
     return count(
         """
-        SELECT COUNT(DISTINCT x.tracking_key)
-        FROM (
-          SELECT
-            h.paquete_id,
-            COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)) AS tracking_key,
-            h.estado_to,
-            p.devolucion_subtipo,
-            CASE
-              WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-              WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
-              WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
-              ELSE h.changed_at
-            END AS effective_at
-          FROM paquete_estado_historial h
-          JOIN paquetes p ON p.id = h.paquete_id
-        ) x
-        WHERE x.estado_to = 'NO_ENTREGABLE'
-          AND x.devolucion_subtipo = ?
-          AND x.effective_at >= ?
-          AND x.effective_at < ?
+        SELECT COUNT(DISTINCT COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)))
+        FROM paquetes p
+        WHERE p.devolucion_subtipo = ?
+          AND p.returned_at >= ?
+          AND p.returned_at < ?
         """,
         subtipo,
         desde,
@@ -118,36 +124,53 @@ public class DashboardController {
   private static final String SNAPSHOT_CTE = """
       WITH event_rows AS (
         SELECT
+          0 AS orden_id,
+          p.id AS paquete_id,
+          COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)) AS tracking_key,
+          'ENTREGADO_A_TRANSPORTISTA_LOCAL' AS estado_to,
+          p.devolucion_subtipo,
+          p.received_at AS effective_at
+        FROM paquetes p
+        WHERE p.received_at IS NOT NULL
+        UNION ALL
+        SELECT
+          1 AS orden_id,
+          p.id AS paquete_id,
+          COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)) AS tracking_key,
+          'PRUEBA_DE_ENTREGA' AS estado_to,
+          p.devolucion_subtipo,
+          p.delivered_at AS effective_at
+        FROM paquetes p
+        WHERE p.delivered_at IS NOT NULL
+        UNION ALL
+        SELECT
+          2 AS orden_id,
+          p.id AS paquete_id,
+          COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)) AS tracking_key,
+          'NO_ENTREGABLE' AS estado_to,
+          p.devolucion_subtipo,
+          p.returned_at AS effective_at
+        FROM paquetes p
+        WHERE p.returned_at IS NOT NULL
+        UNION ALL
+        SELECT
           h.id AS orden_id,
           h.paquete_id,
           COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)) AS tracking_key,
           h.estado_to,
           p.devolucion_subtipo,
-          CASE
-            WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-            WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
-            WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
-            ELSE h.changed_at
-          END AS effective_at
+          h.changed_at AS effective_at
         FROM paquete_estado_historial h
         JOIN paquetes p ON p.id = h.paquete_id
-        UNION ALL
-        SELECT
-          0 AS orden_id,
-          p.id AS paquete_id,
-          COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)) AS tracking_key,
-          p.estado AS estado_to,
-          p.devolucion_subtipo,
-          CASE
-            WHEN p.estado = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-            WHEN p.estado = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
-            WHEN p.estado IN ('ENTREGADO_A_TRANSPORTISTA_LOCAL', 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE', 'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO') AND p.received_at IS NOT NULL THEN p.received_at
-            ELSE p.last_state_change_at
-          END AS effective_at
-        FROM paquetes p
-        WHERE NOT EXISTS (
-          SELECT 1 FROM paquete_estado_historial h2 WHERE h2.paquete_id = p.id
-        )
+        WHERE (h.estado_from IS NULL OR h.estado_from <> h.estado_to)
+          AND h.estado_to IN (
+            'ENTREGADO_A_TRANSPORTISTA_LOCAL',
+            'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE',
+            'ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO',
+            'TR_A_CA'
+          )
+          AND h.changed_at IS NOT NULL
+          AND (p.received_at IS NULL OR h.changed_at >= p.received_at)
       ),
       ranked AS (
         SELECT
