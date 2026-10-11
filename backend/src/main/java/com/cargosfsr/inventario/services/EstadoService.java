@@ -152,11 +152,11 @@ public class EstadoService {
                                                            String devolucionSubtipoOpt,
                                                            Long mensajeroId) {
         if (!StringUtils.hasText(tracking)) throw new IllegalArgumentException("Tracking requerido");
-        String t = tracking.trim().toUpperCase();
+        String t = tracking.trim().toUpperCase(Locale.ROOT);
         if (!TRACKING_PATTERN.matcher(t).matches())
             throw new IllegalArgumentException("Formato de tracking inválido (CR/HZCR/LM + caracteres alfanuméricos)");
 
-        Paquete p = paquetes.findByTrackingCode(t).orElseThrow(
+        Paquete p = paquetes.findByTrackingCodeForUpdate(t).orElseThrow(
             () -> new IllegalArgumentException("No existe paquete con tracking: " + t)
         );
 
@@ -190,8 +190,10 @@ public class EstadoService {
             p.setResponsableConsolidado(mensajero.getFullName());
             touchedMensajero = true;
 
-            p.setDeliveredAt(ts);
-            touchedDelivered = true;
+            if (anterior != nuevo) {
+                p.setDeliveredAt(ts);
+                touchedDelivered = true;
+            }
 
             // No puede estar devuelto y entregado final a la vez
             if (p.getReturnedAt() != null) {
@@ -210,8 +212,10 @@ public class EstadoService {
                 p.setDeliveredAt(null);
             }
 
-            p.setReturnedAt(ts);
-            touchedReturned = true;
+            if (anterior != nuevo) {
+                p.setReturnedAt(ts);
+                touchedReturned = true;
+            }
             p.setDevolucionSubtipo(sub != null ? sub : (p.getDevolucionSubtipo() != null ? p.getDevolucionSubtipo() : DevolucionSubtipo.FUERA_DE_RUTA));
 
         } else if (nuevo == PaqueteEstado.NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE && force) {
@@ -242,8 +246,7 @@ public class EstadoService {
             }
         }
 
-        boolean changesState = (anterior != nuevo) ||
-                               (nuevo == PaqueteEstado.NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE && force);
+        boolean changesState = anterior != nuevo;
         boolean changesSubtipo = subtipoAnterior != p.getDevolucionSubtipo();
         Long mensajeroNuevoId = p.getMensajero() != null ? p.getMensajero().getId() : null;
         boolean changesMensajero = !Objects.equals(mensajeroAnteriorId, mensajeroNuevoId);
@@ -476,6 +479,10 @@ public class EstadoService {
         if (trackings == null || trackings.isEmpty())
             throw new IllegalArgumentException("Lista de trackings vacía");
 
+        int solicitados = trackings.size();
+        trackings = trackings.stream().filter(StringUtils::hasText)
+                .map(t -> t.trim().toUpperCase(Locale.ROOT)).distinct().sorted().toList();
+        if (trackings.isEmpty()) throw new IllegalArgumentException("Lista de trackings vacía");
         int ok = 0, fail = 0;
         List<Map<String,Object>> items = new ArrayList<>();
         for (String t : trackings) {
@@ -507,6 +514,7 @@ public class EstadoService {
             }
         }
         Map<String, Object> out = new LinkedHashMap<>();
+        out.put("solicitados", solicitados);
         out.put("total", trackings.size());
         out.put("ok", ok);
         out.put("fail", fail);
@@ -606,6 +614,10 @@ public class EstadoService {
         if (!StringUtils.hasText(statusExterno))
             throw new IllegalArgumentException("status externo requerido");
 
+        int solicitados = trackings.size();
+        trackings = trackings.stream().filter(StringUtils::hasText)
+                .map(t -> t.trim().toUpperCase(Locale.ROOT)).distinct().sorted().toList();
+        if (trackings.isEmpty()) throw new IllegalArgumentException("Lista de trackings vacía");
         int ok = 0, fail = 0;
         List<Map<String,Object>> items = new ArrayList<>();
         for (String t : trackings) {
@@ -628,6 +640,7 @@ public class EstadoService {
             }
         }
         Map<String, Object> out = new LinkedHashMap<>();
+        out.put("solicitados", solicitados);
         out.put("total", trackings.size());
         out.put("ok", ok);
         out.put("fail", fail);

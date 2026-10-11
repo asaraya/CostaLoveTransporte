@@ -1,6 +1,8 @@
 package com.cargosfsr.inventario.repository;
 
 import java.time.Instant;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
 import java.util.List;
 import java.util.Optional;
 
@@ -18,6 +20,11 @@ import com.cargosfsr.inventario.model.enums.PaqueteEstado;
 public interface PaqueteRepository extends JpaRepository<Paquete, Long> {
 
     Optional<Paquete> findByTrackingCode(String trackingCode);
+
+    /** Serializa cambios concurrentes del mismo paquete dentro de la transacción. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select p from Paquete p where p.trackingCode = :tracking")
+    Optional<Paquete> findByTrackingCodeForUpdate(@Param("tracking") String tracking);
 
     boolean existsByTrackingCode(String trackingCode);
 

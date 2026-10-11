@@ -58,61 +58,24 @@ public class DashboardController {
         hasta);
   }
 
+  // La misma regla que Reportes: una fila por paquete y su estado vigente.
+  // Un movimiento histórico revertido no es una entrega/devolución vigente.
   private int countDistinctEffectiveStateBetween(String estado, Timestamp desde, Timestamp hasta) {
-    return count(
-        """
-        SELECT COUNT(DISTINCT x.tracking_key)
-        FROM (
-          SELECT
-            h.paquete_id,
-            COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)) AS tracking_key,
-            h.estado_to,
-            CASE
-              WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-              WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
-              WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
-              ELSE h.changed_at
-            END AS effective_at
-          FROM paquete_estado_historial h
-          JOIN paquetes p ON p.id = h.paquete_id
-        ) x
-        WHERE x.estado_to = ?
-          AND x.effective_at >= ?
-          AND x.effective_at < ?
-        """,
-        estado,
-        desde,
-        hasta);
+    String columna = switch (estado) {
+      case ESTADO_POD -> "delivered_at";
+      case ESTADO_NO_ENTREGABLE -> "returned_at";
+      default -> "last_state_change_at";
+    };
+    return count("SELECT COUNT(*) FROM paquetes WHERE estado = ? AND " + columna
+        + " >= ? AND " + columna + " < ?", estado, desde, hasta);
   }
 
-  private int countDistinctEffectiveReturnSubtypeBetween(
-      String subtipo, Timestamp desde, Timestamp hasta) {
-    return count(
-        """
-        SELECT COUNT(DISTINCT x.tracking_key)
-        FROM (
-          SELECT
-            h.paquete_id,
-            COALESCE(NULLIF(TRIM(p.tracking_code), ''), CONCAT('#ID:', p.id)) AS tracking_key,
-            h.estado_to,
-            p.devolucion_subtipo,
-            CASE
-              WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-              WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
-              WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
-              ELSE h.changed_at
-            END AS effective_at
-          FROM paquete_estado_historial h
-          JOIN paquetes p ON p.id = h.paquete_id
-        ) x
-        WHERE x.estado_to = 'NO_ENTREGABLE'
-          AND x.devolucion_subtipo = ?
-          AND x.effective_at >= ?
-          AND x.effective_at < ?
-        """,
-        subtipo,
-        desde,
-        hasta);
+  private int countDistinctEffectiveReturnSubtypeBetween(String subtipo, Timestamp desde, Timestamp hasta) {
+    return count("""
+        SELECT COUNT(*) FROM paquetes
+        WHERE estado = 'NO_ENTREGABLE' AND devolucion_subtipo = ?
+          AND returned_at >= ? AND returned_at < ?
+        """, subtipo, desde, hasta);
   }
 
   private static final String SNAPSHOT_CTE = """
@@ -124,13 +87,12 @@ public class DashboardController {
           h.estado_to,
           p.devolucion_subtipo,
           CASE
-            WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-            WHEN h.estado_to = 'NO_ENTREGABLE' AND p.returned_at IS NOT NULL THEN p.returned_at
             WHEN h.estado_from IS NULL AND p.received_at IS NOT NULL THEN p.received_at
             ELSE h.changed_at
           END AS effective_at
         FROM paquete_estado_historial h
         JOIN paquetes p ON p.id = h.paquete_id
+        WHERE h.estado_from IS NULL OR h.estado_from <> h.estado_to
         UNION ALL
         SELECT
           0 AS orden_id,
@@ -177,7 +139,11 @@ public class DashboardController {
     out.put("NO_ENTREGABLE__VENCIDOS", 0);
     out.put("NO_ENTREGABLE__DOS_INTENTOS", 0);
 
-    List<Map<String, Object>> rows = jdbc.queryForList(
+    List<Map<String, Object>> rows = !cutoffExclusivo.before(startOfNextDay(LocalDate.now()))
+        ? jdbc.queryForList("""
+        SELECT estado, devolucion_subtipo, COUNT(*) AS cantidad
+        FROM paquetes GROUP BY estado, devolucion_subtipo
+        """) : jdbc.queryForList(
         SNAPSHOT_CTE + """
         SELECT
           estado_to AS estado,
@@ -293,7 +259,13 @@ public class DashboardController {
     LocalDate d = (fecha == null || fecha.isBlank()) ? LocalDate.now() : LocalDate.parse(fecha);
     Timestamp cutoff = startOfNextDay(d);
 
-    String sql = SNAPSHOT_CTE + """
+    String snapshot = d.isBefore(LocalDate.now()) ? SNAPSHOT_CTE : """
+        WITH ranked AS (
+          SELECT id AS paquete_id, estado AS estado_to, 1 AS rn
+          FROM paquetes WHERE received_at < ?
+        )
+        """;
+    String sql = snapshot + """
         SELECT COALESCE(v.ubicacion_codigo, 'SIN_UBICACION') AS ubicacion, COUNT(*) AS cantidad
         FROM ranked r
         JOIN vw_paquete_resumen v ON v.id = r.paquete_id
@@ -323,7 +295,13 @@ public class DashboardController {
     LocalDate d = (fecha == null || fecha.isBlank()) ? LocalDate.now() : LocalDate.parse(fecha);
     Timestamp cutoff = startOfNextDay(d);
 
-    String sql = SNAPSHOT_CTE + """
+    String snapshot = d.isBefore(LocalDate.now()) ? SNAPSHOT_CTE : """
+        WITH ranked AS (
+          SELECT id AS paquete_id, estado AS estado_to, 1 AS rn
+          FROM paquetes WHERE received_at < ?
+        )
+        """;
+    String sql = snapshot + """
         SELECT COALESCE(v.distrito_nombre, 'SIN_DISTRITO') AS distrito, COUNT(*) AS cantidad
         FROM ranked r
         JOIN vw_paquete_resumen v ON v.id = r.paquete_id
@@ -374,53 +352,16 @@ public class DashboardController {
     Timestamp dFinExcl = startOfNextDay(d);
 
     String sql = """
-        WITH pod_rows AS (
-          SELECT
-            h.paquete_id,
-            h.mensajero_id,
-            CASE
-              WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-              ELSE h.changed_at
-            END AS effective_at,
-            ROW_NUMBER() OVER (
-              PARTITION BY h.paquete_id
-              ORDER BY
-                CASE
-                  WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-                  ELSE h.changed_at
-                END DESC,
-                h.id DESC
-            ) AS rn
-          FROM paquete_estado_historial h
-          JOIN paquetes p ON p.id = h.paquete_id
-          WHERE h.estado_to = 'PRUEBA_DE_ENTREGA'
-            AND (
-              CASE
-                WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-                ELSE h.changed_at
-              END
-            ) >= ?
-            AND (
-              CASE
-                WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-                ELSE h.changed_at
-              END
-            ) < ?
-        )
-        SELECT
-          u.id AS mensajero_id,
-          u.full_name AS transportista,
-          COALESCE(COUNT(pr.paquete_id), 0) AS cantidad
+        SELECT u.id AS mensajero_id, u.full_name AS transportista,
+               COUNT(p.id) AS cantidad
         FROM usuarios u
-        LEFT JOIN pod_rows pr
-          ON pr.mensajero_id = u.id
-         AND pr.rn = 1
+        LEFT JOIN paquetes p ON p.mensajero_id = u.id
+          AND p.estado = 'PRUEBA_DE_ENTREGA'
+          AND p.delivered_at >= ? AND p.delivered_at < ?
         WHERE u.rol = 'MENSAJERO'
         GROUP BY u.id, u.full_name
-        ORDER BY cantidad DESC, transportista ASC
-        LIMIT ?
+        ORDER BY cantidad DESC, transportista ASC LIMIT ?
         """;
-
     return jdbc.query(sql, (rs, i) -> mapTransportista(rs), dIni, dFinExcl, lim);
   }
 
@@ -467,60 +408,15 @@ public class DashboardController {
     Timestamp dFinExcl = startOfNextDay(d);
 
     String sql = """
-        WITH pod_rows AS (
-          SELECT
-            h.id AS hist_id,
-            h.paquete_id,
-            h.mensajero_id,
-            CASE
-              WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-              ELSE h.changed_at
-            END AS delivered_event_at,
-            ROW_NUMBER() OVER (
-              PARTITION BY h.paquete_id
-              ORDER BY
-                CASE
-                  WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-                  ELSE h.changed_at
-                END DESC,
-                h.id DESC
-            ) AS rn
-          FROM paquete_estado_historial h
-          JOIN paquetes p ON p.id = h.paquete_id
-          WHERE h.estado_to = 'PRUEBA_DE_ENTREGA'
-            AND h.mensajero_id = ?
-            AND (
-              CASE
-                WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-                ELSE h.changed_at
-              END
-            ) >= ?
-            AND (
-              CASE
-                WHEN h.estado_to = 'PRUEBA_DE_ENTREGA' AND p.delivered_at IS NOT NULL THEN p.delivered_at
-                ELSE h.changed_at
-              END
-            ) < ?
-        )
-        SELECT
-          p.id,
-          p.tracking_code,
-          s.marchamo,
-          d.nombre AS distrito_nombre,
-          'PRUEBA_DE_ENTREGA' AS estado,
-          pr.delivered_event_at AS delivered_at,
-          p.recipient_name,
-          p.recipient_phone,
-          p.recipient_address
-        FROM pod_rows pr
-        JOIN paquetes p ON p.id = pr.paquete_id
+        SELECT p.id, p.tracking_code, s.marchamo, d.nombre AS distrito_nombre,
+               p.estado, p.delivered_at, p.recipient_name, p.recipient_phone, p.recipient_address
+        FROM paquetes p
         JOIN sacos s ON s.id = p.saco_id
         JOIN distritos d ON d.id = p.distrito_id
-        WHERE pr.rn = 1
-        ORDER BY pr.delivered_event_at DESC, p.id DESC
-        LIMIT ?
+        WHERE p.estado = 'PRUEBA_DE_ENTREGA' AND p.mensajero_id = ?
+          AND p.delivered_at >= ? AND p.delivered_at < ?
+        ORDER BY p.delivered_at DESC, p.id DESC LIMIT ?
         """;
-
     return jdbc.query(sql, (rs, i) -> mapPod(rs), mensajeroId, dIni, dFinExcl, lim);
   }
 
