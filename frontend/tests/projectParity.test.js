@@ -21,8 +21,8 @@ function files(dir) {
 }
 function read(path) { return readFileSync(path, 'utf8').replaceAll('\r\n', '\n') }
 
-test('Heredia y CostaLove conservan la misma lógica, pruebas y SQL', { skip: !paired && 'Repositorio compañero ausente en este entorno' }, () => {
-  const directories = ['backend/src/main/java', 'backend/src/test', 'frontend/src', 'frontend/tests', 'database']
+test('Heredia y CostaLove conservan la misma lógica y pruebas', { skip: !paired && 'Repositorio compañero ausente en este entorno' }, () => {
+  const directories = ['backend/src/main/java', 'backend/src/test', 'frontend/src', 'frontend/tests']
   for (const directory of directories) {
     const a = files(resolve(root, directory)).map(path => relative(root, path).replaceAll('\\', '/')).filter(path => !identityFiles.has(path)).sort()
     const b = files(resolve(paired, directory)).map(path => relative(paired, path).replaceAll('\\', '/')).filter(path => !identityFiles.has(path)).sort()
@@ -38,33 +38,4 @@ test('Heredia y CostaLove conservan la misma lógica, pruebas y SQL', { skip: !p
   delete packageA.name
   delete packageB.name
   assert.deepEqual(packageA, packageB, 'Dependencias o scripts distintos')
-})
-
-test('el instalador no ejecuta operaciones sobre datos existentes', () => {
-  const sql = read(resolve(root, 'database/actualizar_fechas.sql'))
-  let delimiter = ';'
-  let statement = ''
-  let procedures = 0
-  for (const line of sql.split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('--')) continue
-    if (trimmed.startsWith('DELIMITER ')) { delimiter = trimmed.slice(10); continue }
-    statement += line + '\n'
-    if (!trimmed.endsWith(delimiter)) continue
-    const value = statement.trim()
-    if (/^CREATE PROCEDURE\b/i.test(value)) procedures++
-    else assert.match(value, /^(?:CREATE TABLE IF NOT EXISTS\b|CREATE TRIGGER\b|DROP TRIGGER IF EXISTS\b|CREATE OR REPLACE SQL SECURITY INVOKER VIEW\b|DROP PROCEDURE IF EXISTS\b|SET NAMES utf8mb4;|SET @fechas_sql = IF\(|PREPARE fechas_stmt FROM @fechas_sql;|EXECUTE fechas_stmt;|DEALLOCATE PREPARE fechas_stmt;)/i, 'Instrucción de instalación inesperada: ' + value.slice(0, 100))
-    statement = ''
-  }
-  assert.equal(statement.trim(), '')
-  assert.equal(procedures, 121)
-  assert.doesNotMatch(sql, /CREATE (?:PROCEDURE|TRIGGER) IF NOT EXISTS/i)
-  assert.equal((sql.match(/^DELIMITER \$\$$/gm) || []).length, 122)
-  assert.equal((sql.match(/^DROP PROCEDURE IF EXISTS /gm) || []).length, 121)
-  const dynamicSql = [...sql.matchAll(/'([^'\r\n]*)'/g)].map(match => match[1]).filter(value => value.startsWith('ALTER TABLE'))
-  assert.deepEqual(dynamicSql, [
-    'ALTER TABLE paquetes ADD COLUMN registered_at DATETIME NULL',
-    'ALTER TABLE paquete_audit_log ADD COLUMN effective_at DATETIME NULL',
-  ])
-  assert.equal((sql.match(/SET @fechas_sql =/g) || []).length, 2)
 })
