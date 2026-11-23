@@ -265,7 +265,7 @@ public class ImportService {
         long ubicPend = ensureUbicacionPendiente();
 
         // Map distritos existentes (nombre canonical/exacto/normalizado -> id)
-        Map<String, Long> distMap = jdbc.query("SELECT id, nombre FROM distritos",
+        Map<String, Long> distMap = jdbc.query("CALL sp_th_distritos_mapa()",
             rs -> {
                 Map<String, Long> m = new HashMap<>();
                 while (rs.next()) {
@@ -283,7 +283,7 @@ public class ImportService {
             });
 
         // Map ubicaciones existentes (exacto y normalizado)
-        Map<String, Long> ubicMap = jdbc.query("SELECT id, codigo FROM ubicacion",
+        Map<String, Long> ubicMap = jdbc.query("CALL sp_th_ubicaciones_mapa()",
             rs -> {
                 Map<String, Long> m = new HashMap<>();
                 while (rs.next()) {
@@ -304,7 +304,7 @@ public class ImportService {
                 .collect(Collectors.toList());
         batchInsertIgnoreSacos(marchamos);
 
-        Map<String, Long> sacoMap = jdbc.query("SELECT id, marchamo FROM sacos",
+        Map<String, Long> sacoMap = jdbc.query("CALL sp_th_sacos_mapa()",
                 rs -> {
                     Map<String, Long> m = new HashMap<>();
                     while (rs.next()) {
@@ -322,10 +322,10 @@ public class ImportService {
         Set<String> existentesAntes = fetchExistentes(new HashSet<>(trackings));
 
         try {
-            jdbc.update("SET @changed_by = ?", actor);
+            jdbc.update("CALL sp_th_sesion_actor(?)", actor);
             batchInsertIgnorePaquetes(trackings, sacoPend, distPend, ubicPend);
         } finally {
-            jdbc.update("SET @changed_by = NULL");
+            jdbc.update("CALL sp_th_sesion_limpiar_actor()");
         }
 
         int conMarcadores = batchUpdatePaquetes(uniqRows, sacoMap, distMap, ubicMap, sacoPend, distPend, ubicPend, actor);
@@ -513,7 +513,7 @@ public class ImportService {
 
         String actor = currentUser.display();
 
-        jdbc.update("SET @changed_by = ?", actor);
+        jdbc.update("CALL sp_th_sesion_actor(?)", actor);
         try {
             for (CsvRow f : filas) {
                 if (!existentes.contains(f.tracking)) {
@@ -526,7 +526,7 @@ public class ImportService {
                     String distritoParaSP = f.distritoCanon;
                     if (isBlank(distritoParaSP)) {
                         distritoParaSP = jdbc.queryForObject(
-                            "SELECT distrito_nombre FROM vw_paquete_resumen WHERE tracking_code=? LIMIT 1",
+                            "CALL sp_th_paquete_distrito(?)",
                             String.class,
                             f.tracking
                         );
@@ -552,7 +552,7 @@ public class ImportService {
                         jdbc.update("CALL sp_aplicar_status_externo(?,?,?,?)",
                                 f.tracking, status, f.statusAt, actor);
 
-                        jdbc.update("UPDATE paquetes SET cambio_en_sistema_por=? WHERE tracking_code=?", actor, f.tracking);
+                        jdbc.update("CALL sp_th_paquete_actor_tracking(?, ?)", actor, f.tracking);
                         String estadoDespues = fetchEstado(f.tracking);
                         if (estadoAntes != null && estadoDespues != null && !estadoAntes.equals(estadoDespues)) {
                             auditService.registrarPorTracking(
@@ -595,7 +595,7 @@ public class ImportService {
                         else actualizados++;
                     } else {
                         actualizados++;
-                        jdbc.update("UPDATE paquetes SET cambio_en_sistema_por=? WHERE tracking_code=?", actor, f.tracking);
+                        jdbc.update("CALL sp_th_paquete_actor_tracking(?, ?)", actor, f.tracking);
                         auditService.registrarPorTracking(
                             f.tracking,
                             "ACTUALIZACION_DATOS",
@@ -613,7 +613,7 @@ public class ImportService {
                 }
             }
         } finally {
-            jdbc.update("SET @changed_by = NULL");
+            jdbc.update("CALL sp_th_sesion_limpiar_actor()");
         }
 
         Map<String, Object> out = new LinkedHashMap<>();
@@ -686,7 +686,7 @@ public class ImportService {
     private void batchInsertIgnoreSacos(List<String> marchamos) {
         if (marchamos.isEmpty()) return;
         List<String> uniq = marchamos.stream().filter(ImportService::notBlank).distinct().toList();
-        jdbc.batchUpdate("INSERT IGNORE INTO sacos(marchamo) VALUES (?)",
+        jdbc.batchUpdate("CALL sp_th_saco_asegurar(?)",
                 new BatchPreparedStatementSetter() {
                     @Override
                     public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
@@ -702,7 +702,7 @@ public class ImportService {
         if (trackings.isEmpty()) return;
         List<String> uniq = trackings.stream().filter(ImportService::notBlank).distinct().toList();
         jdbc.batchUpdate(
-            "INSERT IGNORE INTO paquetes(tracking_code, saco_id, distrito_id, ubicacion_id, estado) VALUES (?,?,?,?, 'ENTREGADO_A_TRANSPORTISTA_LOCAL')",
+            "CALL sp_th_importar_paquete_base(?, ?, ?, ?)",
             new BatchPreparedStatementSetter() {
                 @Override
                 public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
@@ -747,12 +747,7 @@ public class ImportService {
             }
 
             jdbc.batchUpdate(
-                "UPDATE paquetes " +
-                "   SET saco_id=?, distrito_id=?, ubicacion_id=?, received_at=?, " +
-                "       cambio_en_sistema_por=?, " +
-                "       observaciones = COALESCE(?, observaciones), " +
-                "       responsable_consolidado = COALESCE(?, responsable_consolidado) " +
-                " WHERE tracking_code=?",
+                "CALL sp_th_importar_consolidado(?, ?, ?, ?, ?, ?, ?, ?)",
                 new BatchPreparedStatementSetter() {
                     @Override
                     public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
@@ -1128,10 +1123,7 @@ public class ImportService {
         final int B = 800;
         for (int i = 0; i < list.size(); i += B) {
             List<String> slice = list.subList(i, Math.min(i + B, list.size()));
-            String placeholders = slice.stream().map(x -> "?").collect(Collectors.joining(","));
-            String sql = "SELECT tracking_code FROM paquetes WHERE tracking_code IN (" + placeholders + ")";
-            Object[] params = slice.toArray(new Object[0]);
-            List<String> found = jdbc.query(sql, params, (rs, rn) -> rs.getString(1));
+            List<String> found = jdbc.queryForList("CALL sp_th_trackings_existentes(?)", String.class, ParametrosJson.lista(slice));
             out.addAll(found);
         }
         return out;
@@ -1140,7 +1132,7 @@ public class ImportService {
     private String fetchEstado(String tracking) {
         if (tracking == null || tracking.isBlank()) return null;
         try {
-            return jdbc.query("SELECT estado FROM paquetes WHERE tracking_code = ? LIMIT 1", rs -> rs.next() ? rs.getString(1) : null, tracking);
+            return jdbc.query("CALL sp_th_paquete_estado(?)", rs -> rs.next() ? rs.getString(1) : null, tracking);
         } catch (Exception ex) {
             return null;
         }
@@ -1162,22 +1154,22 @@ public class ImportService {
 
     // ===== Infra: asegurar placeholders =====
     private long ensureSaco(String marchamo) {
-        jdbc.update("INSERT IGNORE INTO sacos(marchamo) VALUES (?)", marchamo);
-        Long id = jdbc.queryForObject("SELECT id FROM sacos WHERE marchamo=? LIMIT 1", Long.class, marchamo);
+        jdbc.update("CALL sp_th_saco_asegurar(?)", marchamo);
+        Long id = jdbc.queryForObject("CALL sp_th_saco_id(?)", Long.class, marchamo);
         if (id == null) throw new IllegalStateException("No se pudo asegurar saco: " + marchamo);
         return id;
     }
 
     private long ensureDistrito(String nombre) {
-        jdbc.update("INSERT IGNORE INTO distritos(nombre, activo) VALUES (?, 1)", nombre);
-        Long id = jdbc.queryForObject("SELECT id FROM distritos WHERE nombre=? LIMIT 1", Long.class, nombre);
+        jdbc.update("CALL sp_th_distrito_asegurar(?)", nombre);
+        Long id = jdbc.queryForObject("CALL sp_th_distrito_id(?)", Long.class, nombre);
         if (id == null) throw new IllegalStateException("No se pudo asegurar distrito: " + nombre);
         return id;
     }
 
     private long ensureUbicacionPendiente() {
-        jdbc.update("INSERT IGNORE INTO ubicacion(tipo, codigo, activo) VALUES ('MUEBLE', 'PENDIENTE', 1)");
-        Long id = jdbc.queryForObject("SELECT id FROM ubicacion WHERE codigo='PENDIENTE' LIMIT 1", Long.class);
+        jdbc.update("CALL sp_th_ubicacion_crear_pendiente()");
+        Long id = jdbc.queryForObject("CALL sp_th_ubicacion_pendiente_id()", Long.class);
         if (id == null) throw new IllegalStateException("No se pudo asegurar ubicación PENDIENTE");
         return id;
     }

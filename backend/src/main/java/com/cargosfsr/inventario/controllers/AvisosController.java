@@ -2,10 +2,10 @@ package com.cargosfsr.inventario.controllers;
 
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import com.cargosfsr.inventario.services.FechasPaquete;
 import java.util.Locale;
 import java.util.Map;
 
@@ -37,13 +37,11 @@ public class AvisosController {
     private enum AvisoTipo { INTENTO_1, INTENTO_2, NO_ENTREGABLE }
 
     private static class AvisoRule {
-        final String whereSql;
         final PaqueteEstado estadoSugerido;
         final int minDias;
         final Integer maxDiasExclusive;
 
-        AvisoRule(String whereSql, PaqueteEstado estadoSugerido, int minDias, Integer maxDiasExclusive) {
-            this.whereSql = whereSql;
+        AvisoRule(PaqueteEstado estadoSugerido, int minDias, Integer maxDiasExclusive) {
             this.estadoSugerido = estadoSugerido;
             this.minDias = minDias;
             this.maxDiasExclusive = maxDiasExclusive;
@@ -60,21 +58,18 @@ public class AvisosController {
         switch (tipo) {
             case INTENTO_1:
                 return new AvisoRule(
-                        "v.estado = 'ENTREGADO_A_TRANSPORTISTA_LOCAL'",
                         PaqueteEstado.NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE,
                         3,
                         4
                 );
             case INTENTO_2:
                 return new AvisoRule(
-                        "v.estado IN ('ENTREGADO_A_TRANSPORTISTA_LOCAL','NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE')",
                         PaqueteEstado.ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO,
                         4,
                         7
                 );
             case NO_ENTREGABLE:
                 return new AvisoRule(
-                        "v.estado IN ('ENTREGADO_A_TRANSPORTISTA_LOCAL','NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE','ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')",
                         PaqueteEstado.NO_ENTREGABLE,
                         7,
                         null
@@ -87,12 +82,10 @@ public class AvisosController {
     private static class DateWindow {
         final String startInclusive;
         final String endExclusive;
-        final boolean hasRange;
 
-        DateWindow(String startInclusive, String endExclusive, boolean hasRange) {
+        DateWindow(String startInclusive, String endExclusive) {
             this.startInclusive = startInclusive;
             this.endExclusive = endExclusive;
-            this.hasRange = hasRange;
         }
     }
 
@@ -102,11 +95,11 @@ public class AvisosController {
             int endDaysAgo = r.minDias - 1;
             String start = today.minusDays(startDaysAgo) + " 00:00:00";
             String end = today.minusDays(endDaysAgo) + " 00:00:00";
-            return new DateWindow(start, end, true);
+            return new DateWindow(start, end);
         }
         int cutoffDaysAgo = r.minDias - 1;
         String cutoff = today.minusDays(cutoffDaysAgo) + " 00:00:00";
-        return new DateWindow(null, cutoff, false);
+        return new DateWindow(null, cutoff);
     }
 
     private long countFor(AvisoTipo tipo) {
@@ -116,22 +109,9 @@ public class AvisosController {
         LocalDate today = LocalDate.now();
         DateWindow w = windowFor(today, r);
 
-        StringBuilder sql = new StringBuilder();
-        sql.append("SELECT COUNT(*) FROM vw_paquete_resumen v WHERE ");
-        sql.append(r.whereSql);
-
-        List<Object> args = new ArrayList<>();
-        if (w.hasRange) {
-            sql.append(" AND v.received_at >= ? AND v.received_at < ? ");
-            args.add(w.startInclusive);
-            args.add(w.endExclusive);
-        } else {
-            sql.append(" AND v.received_at < ? ");
-            args.add(w.endExclusive);
-        }
-
-        Long c = jdbc.queryForObject(sql.toString(), Long.class, args.toArray());
+        Long c = jdbc.queryForObject("CALL sp_th_avisos_contar(?, ?, ?)", Long.class, tipo.name(), w.startInclusive, w.endExclusive);
         return c == null ? 0 : c.longValue();
+
     }
 
     @GetMapping("/avisos")
@@ -147,30 +127,8 @@ public class AvisosController {
         LocalDate today = LocalDate.now();
         DateWindow w = windowFor(today, r);
 
-        StringBuilder sql = new StringBuilder();
-        sql.append("""
-                SELECT v.id, v.tracking_code, v.marchamo, v.estado, v.received_at,
-                       v.recipient_name, v.recipient_phone, v.recipient_address, v.distrito_nombre
-                FROM vw_paquete_resumen v
-                WHERE
-                """);
-        sql.append(r.whereSql);
+        return FechasPaquete.completar(jdbc, jdbc.queryForList("CALL sp_th_avisos_listar(?, ?, ?, ?, ?)", t.name(), w.startInclusive, w.endExclusive, limit, offset));
 
-        List<Object> args = new ArrayList<>();
-        if (w.hasRange) {
-            sql.append(" AND v.received_at >= ? AND v.received_at < ? ");
-            args.add(w.startInclusive);
-            args.add(w.endExclusive);
-        } else {
-            sql.append(" AND v.received_at < ? ");
-            args.add(w.endExclusive);
-        }
-
-        sql.append(" ORDER BY v.received_at ASC, v.id ASC LIMIT ? OFFSET ? ");
-        args.add(limit);
-        args.add(offset);
-
-        return jdbc.queryForList(sql.toString(), args.toArray());
     }
 
     @GetMapping("/avisos/count")
@@ -207,21 +165,7 @@ public class AvisosController {
         LocalDate today = LocalDate.now();
         DateWindow w = windowFor(today, r);
 
-        StringBuilder sql = new StringBuilder();
-        sql.append("SELECT v.tracking_code FROM vw_paquete_resumen v WHERE ");
-        sql.append(r.whereSql);
-
-        List<Object> args = new ArrayList<>();
-        if (w.hasRange) {
-            sql.append(" AND v.received_at >= ? AND v.received_at < ? ");
-            args.add(w.startInclusive);
-            args.add(w.endExclusive);
-        } else {
-            sql.append(" AND v.received_at < ? ");
-            args.add(w.endExclusive);
-        }
-
-        List<String> trackings = jdbc.queryForList(sql.toString(), String.class, args.toArray());
+        List<String> trackings = jdbc.queryForList("CALL sp_th_avisos_trackings(?, ?, ?)", String.class, t.name(), w.startInclusive, w.endExclusive);
         if (trackings == null || trackings.isEmpty()) {
             return Map.of("total", 0, "ok", 0, "fail", 0, "details", Collections.emptyList());
         }

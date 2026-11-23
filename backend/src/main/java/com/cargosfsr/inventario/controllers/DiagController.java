@@ -61,11 +61,12 @@ public class DiagController {
             out.put("jdbcUrl", md.getURL());
             out.put("dbUser", md.getUserName());
         }
-        out.put("database()", jdbc.queryForObject("SELECT DATABASE()", String.class));
-        out.put("@@global.time_zone", jdbc.queryForObject("SELECT @@global.time_zone", String.class));
-        out.put("@@session.time_zone", jdbc.queryForObject("SELECT @@session.time_zone", String.class));
-        out.put("@@sql_mode", jdbc.queryForObject("SELECT @@sql_mode", String.class));
-        out.put("now()", jdbc.queryForObject("SELECT NOW()", String.class));
+        var session = jdbc.queryForMap("CALL sp_th_diagnostico_sesion()");
+        out.put("database()", session.get("db"));
+        out.put("@@global.time_zone", session.get("global_tz"));
+        out.put("@@session.time_zone", session.get("session_tz"));
+        out.put("@@sql_mode", session.get("modo"));
+        out.put("now()", session.get("ahora"));
         return out;
     }
 
@@ -80,12 +81,7 @@ public class DiagController {
     @GetMapping("/db")
     public Map<String, Object> db() {
         Map<String, Object> q = jdbc.queryForMap(
-            "SELECT " +
-            "@@global.time_zone AS global_tz, " +
-            "@@session.time_zone AS session_tz, " +
-            "NOW() AS now_session, " +
-            "UTC_TIMESTAMP() AS now_utc, " +
-            "CONVERT_TZ(UTC_TIMESTAMP(),'UTC', ?) AS now_cr",
+            "CALL sp_th_diagnostico_zonas(?)",
             TZ_ID
         );
 
@@ -103,19 +99,19 @@ public class DiagController {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("fecha", fecha);
 
-        out.put("recibidos_DATE",  jdbc.queryForObject("SELECT COUNT(*) FROM paquetes WHERE DATE(received_at)=?", Integer.class, fecha));
-        out.put("entregados_DATE", jdbc.queryForObject("SELECT COUNT(*) FROM paquetes WHERE DATE(delivered_at)=?", Integer.class, fecha));
-        out.put("no_entregable_DATE", jdbc.queryForObject("SELECT COUNT(*) FROM paquetes WHERE DATE(returned_at)=?", Integer.class, fecha));
+        out.put("recibidos_DATE",  jdbc.queryForObject("CALL sp_th_diagnostico_recibidos(?)", Integer.class, fecha));
+        out.put("entregados_DATE", jdbc.queryForObject("CALL sp_th_diagnostico_entregas(?)", Integer.class, fecha));
+        out.put("no_entregable_DATE", jdbc.queryForObject("CALL sp_th_diagnostico_devoluciones(?)", Integer.class, fecha));
 
         out.put("disponible_total", jdbc.queryForObject(
-            "SELECT COUNT(*) FROM paquetes WHERE estado='NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'", Integer.class));
+            "CALL sp_th_diagnostico_disponibles()", Integer.class));
 
         out.put("entregado_total", jdbc.queryForObject(
-            "SELECT COUNT(*) FROM paquetes WHERE estado IN ('ENTREGADO_A_TRANSPORTISTA_LOCAL','ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')",
+            "CALL sp_th_diagnostico_transportista()",
             Integer.class));
 
         out.put("no_entregable_total", jdbc.queryForObject(
-            "SELECT COUNT(*) FROM paquetes WHERE estado='NO_ENTREGABLE'", Integer.class));
+            "CALL sp_th_diagnostico_no_entregables()", Integer.class));
 
         return out;
     }
@@ -138,14 +134,14 @@ public class DiagController {
         );
         for (String n : names) {
             Map<String, Object> row = null;
-            try { row = jdbc.queryForMap("SHOW PROCEDURE STATUS WHERE Db = DATABASE() AND Name = ?", n); }
+            try { row = jdbc.queryForMap("CALL sp_th_diagnostico_rutina(?)", n); }
             catch (Exception ignore) {}
 
             Map<String, Object> info = new LinkedHashMap<>();
             info.put("exists", row != null && !row.isEmpty());
             if (Boolean.TRUE.equals(info.get("exists"))) {
                 try {
-                    Map<String, Object> create = jdbc.queryForMap("SHOW CREATE PROCEDURE " + n);
+                    Map<String, Object> create = jdbc.queryForMap("CALL sp_th_diagnostico_definicion(?)", n);
                     String body = (String) create.get("Create Procedure");
                     info.put("length", body == null ? 0 : body.length());
                     info.put("checksum", body == null ? null : Integer.toHexString(body.hashCode()));

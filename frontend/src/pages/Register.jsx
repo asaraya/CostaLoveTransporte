@@ -1,3 +1,4 @@
+import { APP_NAME } from '../brand.js'
 // src/pages/Register.jsx
 import { useState } from 'react'
 import { useLocation, useNavigate, Link } from 'react-router-dom'
@@ -38,8 +39,8 @@ export default function Register() {
       <div className="auth-card">
         <div className="auth-head">
           <div className="brand">
-            <img src={logoUrl} alt="Cargo FSR" />
-            <strong>Inventario</strong>
+            <img src={logoUrl} alt={APP_NAME} />
+            <strong>{APP_NAME}</strong>
           </div>
           <h1>Crear cuenta</h1>
         </div>

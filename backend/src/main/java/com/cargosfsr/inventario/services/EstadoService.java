@@ -124,8 +124,8 @@ public class EstadoService {
 
     /** Inicializa la sesión SQL con TZ CR y el usuario para triggers/SPs */
     private void initDbSession(String who) {
-        em.createNativeQuery("SET time_zone = '-06:00'").executeUpdate();
-        em.createNativeQuery("SET @changed_by := :who")
+        em.createNativeQuery("CALL sp_th_sesion_zona_cr()").executeUpdate();
+        em.createNativeQuery("CALL sp_th_sesion_usuario(:who)")
           .setParameter("who", who)
           .executeUpdate();
     }
@@ -151,6 +151,21 @@ public class EstadoService {
                                                            Instant when,
                                                            String devolucionSubtipoOpt,
                                                            Long mensajeroId) {
+        return actualizarEstado(tracking, nuevo, motivo, changedByIgnored, force, when,
+                devolucionSubtipoOpt, mensajeroId, auditService.moduloDesdeMotivo(motivo));
+    }
+
+    @Transactional
+    @CacheEvict(cacheNames = { "inventario", "busquedas" }, allEntries = true)
+    public Map<String, Object> entregarDesdeMovil(String tracking, Instant when, Usuario usuario) {
+        return actualizarEstado(tracking, PaqueteEstado.PRUEBA_DE_ENTREGA,
+                "POD desde aplicación móvil", usuario.getUsername(), false, when,
+                null, usuario.getId(), "APLICACION_MOVIL");
+    }
+
+    private Map<String, Object> actualizarEstado(String tracking, PaqueteEstado nuevo,
+            String motivo, String changedByIgnored, boolean force, Instant when,
+            String devolucionSubtipoOpt, Long mensajeroId, String moduloOrigen) {
         if (!StringUtils.hasText(tracking)) throw new IllegalArgumentException("Tracking requerido");
         String t = tracking.trim().toUpperCase(Locale.ROOT);
         if (!TRACKING_PATTERN.matcher(t).matches())
@@ -271,12 +286,7 @@ public class EstadoService {
             p.setLastStateChangeAt(ts);
             paquetes.save(p);
 
-            em.createNativeQuery("""
-                UPDATE paquetes
-                   SET last_state_change_at = DATE_SUB(:ts, INTERVAL 6 HOUR),
-                       cambio_en_sistema_por = :who
-                 WHERE id = :id
-            """)
+            em.createNativeQuery("CALL sp_th_estado_actualizar_fecha(:ts, :who, :id)")
             .setParameter("ts", Timestamp.from(ts))
             .setParameter("who", user)
             .setParameter("id", p.getId())
@@ -287,7 +297,7 @@ public class EstadoService {
                 nuevo.name(),
                 subtipoAnterior != null ? subtipoAnterior.name() : null,
                 p.getDevolucionSubtipo() != null ? p.getDevolucionSubtipo().name() : null,
-                auditService.moduloDesdeMotivo(motivo),
+                moduloOrigen,
                 motivo,
                 user
             );
@@ -310,32 +320,18 @@ public class EstadoService {
             p.setLastStateChangeAt(ts);
             paquetes.save(p);
 
-            StringBuilder sqlDetalleEstado = new StringBuilder("""
-                UPDATE paquetes
-                   SET last_state_change_at = DATE_SUB(:ts, INTERVAL 6 HOUR),
-                       cambio_en_sistema_por = :who
-            """);
-            if (p.getMensajero() != null) {
-                sqlDetalleEstado.append(", mensajero_id = :mensajeroId, responsable_consolidado = :mensajeroName");
-            } else {
-                sqlDetalleEstado.append(", mensajero_id = NULL, responsable_consolidado = NULL");
-            }
-            sqlDetalleEstado.append(" WHERE id = :id");
-
-            var qDetalleEstado = em.createNativeQuery(sqlDetalleEstado.toString())
+            em.createNativeQuery("CALL sp_th_detalle_mensajero(:ts, :actor, :id, :mensajero, :nombre)")
                 .setParameter("ts", Timestamp.from(ts))
-                .setParameter("who", user)
-                .setParameter("id", p.getId());
-            if (p.getMensajero() != null) {
-                qDetalleEstado.setParameter("mensajeroId", p.getMensajero().getId());
-                qDetalleEstado.setParameter("mensajeroName", p.getMensajero().getFullName());
-            }
-            qDetalleEstado.executeUpdate();
+                .setParameter("actor", user)
+                .setParameter("id", p.getId())
+                .setParameter("mensajero", mensajeroNuevoId)
+                .setParameter("nombre", p.getMensajero() == null ? null : p.getMensajero().getFullName())
+                .executeUpdate();
 
             auditService.registrarDetalleEstado(
                 p,
                 nuevo.name(),
-                auditService.moduloDesdeMotivo(motivo),
+                moduloOrigen,
                 motivo,
                 user
             );
@@ -361,49 +357,18 @@ public class EstadoService {
         paquetes.save(p);
 
         // Ajuste -6h hecho por MySQL + último cambio por
-        StringBuilder sql = new StringBuilder(
-            "UPDATE paquetes SET " +
-            "last_state_change_at = DATE_SUB(:ts, INTERVAL 6 HOUR), " +
-            "cambio_en_sistema_por = :who"
-        );
-
-        // timestamps de estado
-        if (touchedDelivered) sql.append(", delivered_at = DATE_SUB(:ts, INTERVAL 6 HOUR)");
-        if (touchedReturned)  sql.append(", returned_at  = DATE_SUB(:ts, INTERVAL 6 HOUR)");
-
-        // mensajero (solo aplica cuando PRUEBA_DE_ENTREGA)
-        if (touchedMensajero) {
-            if (nuevo == PaqueteEstado.PRUEBA_DE_ENTREGA) {
-                sql.append(", mensajero_id = :mensajeroId, responsable_consolidado = :mensajeroName");
-            } else {
-                sql.append(", mensajero_id = NULL");
-            }
-        }
-
-        // si se marca como entregado a persona, limpia devolución
-        if (nuevo == PaqueteEstado.PRUEBA_DE_ENTREGA) {
-            sql.append(", returned_at = NULL");
-        }
-
-        // reset forzado (limpiar)
-        if (nuevo == PaqueteEstado.NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE && force) {
-            sql.append(", delivered_at = NULL, returned_at = NULL");
-        }
-
-        sql.append(" WHERE id = :id");
-
-        var q = em.createNativeQuery(sql.toString())
+        em.createNativeQuery("CALL sp_th_estado_guardar(:id, :ts, :actor, :estado, :entrega, :devolucion, :tocarMensajero, :mensajero, :nombre, :limpiar)")
+          .setParameter("id", p.getId())
           .setParameter("ts", Timestamp.from(ts))
-          .setParameter("who", user)
-          .setParameter("id", p.getId());
-
-        // Solo bindeamos los parámetros si el SQL los incluye
-        if (touchedMensajero && nuevo == PaqueteEstado.PRUEBA_DE_ENTREGA) {
-            q.setParameter("mensajeroId", mensajero.getId());
-            q.setParameter("mensajeroName", mensajero.getFullName());
-        }
-
-        q.executeUpdate();
+          .setParameter("actor", user)
+          .setParameter("estado", nuevo.name())
+          .setParameter("entrega", touchedDelivered)
+          .setParameter("devolucion", touchedReturned)
+          .setParameter("tocarMensajero", touchedMensajero)
+          .setParameter("mensajero", mensajeroNuevoId)
+          .setParameter("nombre", mensajero == null ? null : mensajero.getFullName())
+          .setParameter("limpiar", nuevo == PaqueteEstado.NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE && force)
+          .executeUpdate();
 
         PaqueteEstadoHistorial h = new PaqueteEstadoHistorial();
         h.setPaquete(p);
@@ -419,11 +384,7 @@ public class EstadoService {
         }
         historial.save(h);
 
-        em.createNativeQuery("""
-            UPDATE paquete_estado_historial
-               SET changed_at = DATE_SUB(changed_at, INTERVAL 6 HOUR)
-             WHERE id = :id
-        """).setParameter("id", h.getId())
+        em.createNativeQuery("CALL sp_th_historial_normalizar_fecha(:id)").setParameter("id", h.getId())
           .executeUpdate();
 
         auditService.registrarCambioEstado(
@@ -432,7 +393,7 @@ public class EstadoService {
             nuevo.name(),
             subtipoAnterior != null ? subtipoAnterior.name() : null,
             p.getDevolucionSubtipo() != null ? p.getDevolucionSubtipo().name() : null,
-            auditService.moduloDesdeMotivo(motivo),
+            moduloOrigen,
             motivo,
             user
         );
@@ -552,7 +513,7 @@ public class EstadoService {
 
         em.clear();
         Paquete p = paquetes.findByTrackingCode(t).orElseThrow();
-        em.createNativeQuery("UPDATE paquetes SET cambio_en_sistema_por = :who WHERE id = :id")
+        em.createNativeQuery("CALL sp_th_paquete_actor_id(:who, :id)")
           .setParameter("who", user)
           .setParameter("id", p.getId())
           .executeUpdate();

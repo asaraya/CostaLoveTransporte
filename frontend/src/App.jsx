@@ -1,3 +1,4 @@
+import { APP_NAME } from './brand.js'
 // src/App.jsx
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { NavLink, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
@@ -223,7 +224,7 @@ export default function App() {
         <header className="topbar">
           <div className="topbar__inner" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <div className="brand" style={{ display: 'flex', alignItems: 'center' }}>
-              <img src={logoUrl} alt="Cargo FSR" height={32} />
+              <img src={logoUrl} alt={APP_NAME} height={32} />
               <strong style={{ marginLeft: 8, color: '#163E7A' }}>Inventario</strong>
             </div>
 

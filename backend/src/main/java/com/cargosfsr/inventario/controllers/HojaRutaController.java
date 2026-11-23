@@ -1,8 +1,6 @@
 package com.cargosfsr.inventario.controllers;
 
 import java.sql.Date;
-import java.sql.PreparedStatement;
-import java.sql.Statement;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -16,8 +14,6 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.jdbc.support.GeneratedKeyHolder;
-import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,6 +26,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.cargosfsr.inventario.auth.CurrentUser;
+import com.cargosfsr.inventario.services.ParametrosJson;
 
 @RestController
 @RequestMapping(path = "/api/hojas-ruta", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -86,13 +83,7 @@ public class HojaRutaController {
         }
 
         Integer count = jdbc.queryForObject(
-                """
-                SELECT COUNT(*)
-                FROM usuarios
-                WHERE id = ?
-                  AND active = 1
-                  AND rol = 'MENSAJERO'
-                """,
+                "CALL sp_th_hoja_validar_mensajero(?)",
                 Integer.class,
                 transportistaId);
 
@@ -104,19 +95,9 @@ public class HojaRutaController {
     private Map<String, Map<String, Object>> cargarPaquetesPorTracking(List<String> trackings) {
         if (trackings == null || trackings.isEmpty()) return Collections.emptyMap();
 
-        MapSqlParameterSource params = new MapSqlParameterSource("trackings", trackings);
+        MapSqlParameterSource params = new MapSqlParameterSource("trackings", ParametrosJson.lista(trackings));
         List<Map<String, Object>> rows = namedJdbc.queryForList(
-                """
-                SELECT
-                  p.id,
-                  UPPER(p.tracking_code) AS tracking_code,
-                  p.recipient_name,
-                  p.recipient_phone,
-                  p.recipient_address,
-                  p.estado
-                FROM paquetes p
-                WHERE UPPER(p.tracking_code) IN (:trackings)
-                """,
+                "CALL sp_th_hoja_paquetes(:trackings)",
                 params);
 
         Map<String, Map<String, Object>> out = new LinkedHashMap<>();
@@ -142,23 +123,11 @@ public class HojaRutaController {
 
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("fecha", Date.valueOf(fecha))
-                .addValue("trackings", trackings)
+                .addValue("trackings", ParametrosJson.lista(trackings))
                 .addValue("hojaActualId", hojaActualId == null ? -1L : hojaActualId);
 
         List<Map<String, Object>> rows = namedJdbc.queryForList(
-                """
-                SELECT
-                  d.tracking_code,
-                  h.id AS hoja_ruta_id,
-                  u.full_name AS transportista
-                FROM hoja_ruta_detalle d
-                JOIN hojas_ruta h ON h.id = d.hoja_ruta_id
-                JOIN usuarios u ON u.id = h.transportista_id
-                WHERE d.fecha = :fecha
-                  AND UPPER(d.tracking_code) IN (:trackings)
-                  AND h.id <> :hojaActualId
-                ORDER BY d.tracking_code ASC
-                """,
+                "CALL sp_th_hoja_conflictos(:fecha, :trackings, :hojaActualId)",
                 params);
 
         if (!rows.isEmpty()) {
@@ -189,42 +158,13 @@ public class HojaRutaController {
         }
 
         namedJdbc.batchUpdate(
-                """
-                INSERT INTO hoja_ruta_detalle(
-                  hoja_ruta_id,
-                  fecha,
-                  paquete_id,
-                  tracking_code,
-                  orden
-                )
-                VALUES (
-                  :hojaRutaId,
-                  :fecha,
-                  :paqueteId,
-                  :trackingCode,
-                  :orden
-                )
-                """,
+                "CALL sp_th_hoja_detalle_crear(:hojaRutaId, :fecha, :paqueteId, :trackingCode, :orden)",
                 batch.toArray(MapSqlParameterSource[]::new));
     }
 
     private List<Map<String, Object>> listarHojasPorFecha(LocalDate fecha) {
         List<Map<String, Object>> hojas = jdbc.queryForList(
-                """
-                SELECT
-                  h.id,
-                  h.fecha,
-                  h.transportista_id,
-                  u.full_name AS transportista,
-                  h.created_by,
-                  h.created_at,
-                  h.updated_by,
-                  h.updated_at
-                FROM hojas_ruta h
-                JOIN usuarios u ON u.id = h.transportista_id
-                WHERE h.fecha = ?
-                ORDER BY u.full_name ASC, h.id ASC
-                """,
+                "CALL sp_th_hojas_por_fecha(?)",
                 Date.valueOf(fecha));
 
         if (hojas.isEmpty()) return hojas;
@@ -233,23 +173,9 @@ public class HojaRutaController {
                 .map(row -> ((Number) row.get("id")).longValue())
                 .toList();
 
-        MapSqlParameterSource params = new MapSqlParameterSource("ids", ids);
+        MapSqlParameterSource params = new MapSqlParameterSource("ids", ParametrosJson.lista(ids));
         List<Map<String, Object>> detalles = namedJdbc.queryForList(
-                """
-                SELECT
-                  d.id,
-                  d.hoja_ruta_id,
-                  d.orden,
-                  d.tracking_code,
-                  p.recipient_name AS cliente,
-                  p.recipient_phone AS cel,
-                  p.recipient_address AS thirdparty_address,
-                  p.estado
-                FROM hoja_ruta_detalle d
-                JOIN paquetes p ON p.id = d.paquete_id
-                WHERE d.hoja_ruta_id IN (:ids)
-                ORDER BY d.hoja_ruta_id ASC, d.orden ASC, d.id ASC
-                """,
+                "CALL sp_th_hoja_detalles(:ids)",
                 params);
 
         Map<Long, List<Map<String, Object>>> detallesPorHoja = new LinkedHashMap<>();
@@ -268,16 +194,7 @@ public class HojaRutaController {
 
     private Map<String, Object> buscarHojaPorId(long id) {
         List<Map<String, Object>> rows = jdbc.queryForList(
-                """
-                SELECT
-                  h.id,
-                  h.fecha,
-                  h.transportista_id,
-                  u.full_name AS transportista
-                FROM hojas_ruta h
-                JOIN usuarios u ON u.id = h.transportista_id
-                WHERE h.id = ?
-                """,
+                "CALL sp_th_hoja_consultar(?)",
                 id);
         if (rows.isEmpty()) {
             throw new IllegalArgumentException("hoja de ruta no encontrada");
@@ -288,16 +205,7 @@ public class HojaRutaController {
     @GetMapping("/transportistas")
     public List<Map<String, Object>> transportistas() {
         return jdbc.queryForList(
-                """
-                SELECT
-                  id,
-                  full_name AS nombre,
-                  username
-                FROM usuarios
-                WHERE active = 1
-                  AND rol = 'MENSAJERO'
-                ORDER BY full_name ASC
-                """);
+                "CALL sp_th_hoja_mensajeros()");
     }
 
     @GetMapping
@@ -327,30 +235,9 @@ public class HojaRutaController {
         validarNoAsignadosMismoDia(fecha, trackings, null);
 
         String user = actor();
-        KeyHolder keyHolder = new GeneratedKeyHolder();
-
-        jdbc.update(con -> {
-            PreparedStatement ps = con.prepareStatement(
-                    """
-                    INSERT INTO hojas_ruta(
-                      fecha,
-                      transportista_id,
-                      created_by,
-                      updated_by
-                    )
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    Statement.RETURN_GENERATED_KEYS);
-            ps.setDate(1, Date.valueOf(fecha));
-            ps.setLong(2, body.transportistaId);
-            ps.setString(3, user);
-            ps.setString(4, user);
-            return ps;
-        }, keyHolder);
-
-        Number key = keyHolder.getKey();
-        if (key == null) throw new IllegalStateException("no se pudo crear la hoja de ruta");
-        long hojaRutaId = key.longValue();
+        Long hojaRutaId = jdbc.queryForObject("CALL sp_th_hoja_crear(?, ?, ?)",
+                Long.class, Date.valueOf(fecha), body.transportistaId, user);
+        if (hojaRutaId == null) throw new IllegalStateException("no se pudo crear la hoja de ruta");
 
         insertarDetalle(hojaRutaId, fecha, trackings, paquetes);
 
@@ -381,8 +268,8 @@ public class HojaRutaController {
         // NUEVO:
         // Si la edición deja la hoja sin paquetes, se elimina por completo.
         if (trackings.isEmpty()) {
-            int detallesEliminados = jdbc.update("DELETE FROM hoja_ruta_detalle WHERE hoja_ruta_id = ?", id);
-            int hojasEliminadas = jdbc.update("DELETE FROM hojas_ruta WHERE id = ?", id);
+            int detallesEliminados = jdbc.update("CALL sp_th_hoja_detalles_eliminar(?)", id);
+            int hojasEliminadas = jdbc.update("CALL sp_th_hoja_eliminar(?)", id);
 
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("ok", true);
@@ -397,16 +284,11 @@ public class HojaRutaController {
         validarPaquetesExisten(trackings, paquetes);
         validarNoAsignadosMismoDia(fecha, trackings, id);
 
-        jdbc.update("DELETE FROM hoja_ruta_detalle WHERE hoja_ruta_id = ?", id);
+        jdbc.update("CALL sp_th_hoja_detalles_eliminar(?)", id);
         insertarDetalle(id, fecha, trackings, paquetes);
 
         jdbc.update(
-                """
-                UPDATE hojas_ruta
-                SET updated_by = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
+                "CALL sp_th_hoja_actualizar_actor(?, ?)",
                 actor(),
                 id);
 
@@ -424,8 +306,8 @@ public class HojaRutaController {
     public Map<String, Object> eliminar(@PathVariable long id) {
         buscarHojaPorId(id);
 
-        int detallesEliminados = jdbc.update("DELETE FROM hoja_ruta_detalle WHERE hoja_ruta_id = ?", id);
-        int hojasEliminadas = jdbc.update("DELETE FROM hojas_ruta WHERE id = ?", id);
+        int detallesEliminados = jdbc.update("CALL sp_th_hoja_detalles_eliminar(?)", id);
+        int hojasEliminadas = jdbc.update("CALL sp_th_hoja_eliminar(?)", id);
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("ok", true);

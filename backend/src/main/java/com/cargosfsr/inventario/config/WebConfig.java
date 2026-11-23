@@ -1,6 +1,7 @@
 package com.cargosfsr.inventario.config;
 
 import java.util.Arrays;
+import org.springframework.beans.factory.annotation.Value;
 
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -19,9 +20,12 @@ import com.cargosfsr.inventario.auth.AuthInterceptor;
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
 
-    private static final String FRONT_SANPABLO = "https://cargofsr-production.up.railway.app";
-    private static final String FRONT_GUAPILES = "https://costalovetransporte-production.up.railway.app";
-    private static final String FRONT_DEV      = "http://localhost:5173";
+    private final String[] allowedOrigins;
+
+    public WebConfig(@Value("${app.cors.allowed-origins:http://localhost:5173}") String origins) {
+        this.allowedOrigins = Arrays.stream(origins.split(","))
+                .map(String::trim).filter(s -> !s.isEmpty()).toArray(String[]::new);
+    }
 
     @Bean
     public BCryptPasswordEncoder passwordEncoder() { return new BCryptPasswordEncoder(); }
@@ -32,7 +36,7 @@ public class WebConfig implements WebMvcConfigurer {
 
         // Mantiene /api/** como lo tenías
         registry.addMapping("/api/**")
-                .allowedOrigins(FRONT_SANPABLO, FRONT_GUAPILES, FRONT_DEV)
+                .allowedOrigins(allowedOrigins)
                 .allowedMethods("GET","POST","PUT","PATCH","DELETE","OPTIONS")
                 .allowedHeaders("Content-Type","Accept","X-Requested-With","Authorization","Origin","Cache-Control","Pragma")
                 .exposedHeaders("Location")
@@ -41,7 +45,7 @@ public class WebConfig implements WebMvcConfigurer {
 
         // NUEVO: agrega CORS para /auth/** (porque estás pegándole a /auth/login)
         registry.addMapping("/auth/**")
-                .allowedOrigins(FRONT_SANPABLO, FRONT_GUAPILES, FRONT_DEV)
+                .allowedOrigins(allowedOrigins)
                 .allowedMethods("GET","POST","PUT","PATCH","DELETE","OPTIONS")
                 .allowedHeaders("Content-Type","Accept","X-Requested-With","Authorization","Origin","Cache-Control","Pragma")
                 .exposedHeaders("Location")
@@ -54,8 +58,8 @@ public class WebConfig implements WebMvcConfigurer {
     public FilterRegistrationBean<CorsFilter> corsFilter() {
         CorsConfiguration cfg = new CorsConfiguration();
 
-        // Mantiene anteriores + agrega el nuevo
-        cfg.setAllowedOrigins(Arrays.asList(FRONT_SANPABLO, FRONT_GUAPILES, FRONT_DEV));
+        // Orígenes de esta instancia, configurados por variables de entorno.
+        cfg.setAllowedOrigins(Arrays.asList(allowedOrigins));
 
         cfg.setAllowCredentials(true);
         cfg.setAllowedMethods(Arrays.asList("GET","POST","PUT","PATCH","DELETE","OPTIONS"));
@@ -82,7 +86,7 @@ public class WebConfig implements WebMvcConfigurer {
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(new AuthInterceptor())
                 .addPathPatterns("/api/**")
-                .excludePathPatterns("/api/auth/**");
+                .excludePathPatterns("/api/auth/**", "/api/mobile/v1/**");
 
         registry.addInterceptor(new AdminInterceptor())
                 .addPathPatterns("/api/admin/**");

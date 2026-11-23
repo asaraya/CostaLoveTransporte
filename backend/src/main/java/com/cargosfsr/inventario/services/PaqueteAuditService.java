@@ -111,6 +111,7 @@ public class PaqueteAuditService {
     private static String labelModulo(Object value) {
         String s = code(value);
         switch (s) {
+            case "APLICACION_MOVIL": return "Aplicación móvil";
             case "RECEPCION": return "Recepción";
             case "IMPORTACION_CONSOLIDADO": return "Importación de consolidado";
             case "IMPORTACION_TRACKS_CSV": return "Importación Tracks CSV";
@@ -205,12 +206,7 @@ public class PaqueteAuditService {
                           String usuario,
                           String detalleJson) {
         if (!StringUtils.hasText(trackingCode)) return;
-        jdbc.update("""
-            INSERT INTO paquete_audit_log
-                (paquete_id, tracking_code, accion, modulo_origen, descripcion, campo_afectado,
-                 valor_anterior, valor_nuevo, usuario, detalle_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+        jdbc.update("CALL sp_th_auditoria_registrar(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             paqueteId,
             trackingCode.trim().toUpperCase(Locale.ROOT),
             clean(accion),
@@ -220,7 +216,8 @@ public class PaqueteAuditService {
             str(valorAnterior),
             str(valorNuevo),
             actor(usuario),
-            StringUtils.hasText(detalleJson) ? detalleJson : null
+            StringUtils.hasText(detalleJson) ? detalleJson : null,
+            accion, accion, paqueteId
         );
     }
 
@@ -239,7 +236,7 @@ public class PaqueteAuditService {
         Long paqueteId = null;
         String subtipoActual = null;
         try {
-            Map<String, Object> info = jdbc.query("SELECT id, devolucion_subtipo FROM paquetes WHERE tracking_code = ? LIMIT 1", rs -> {
+            Map<String, Object> info = jdbc.query("CALL sp_th_paquete_datos_auditoria(?)", rs -> {
                 if (!rs.next()) return null;
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("id", rs.getLong("id"));
@@ -448,14 +445,7 @@ public class PaqueteAuditService {
             throw new IllegalArgumentException("Tracking requerido");
         }
         String t = trackingCode.trim().toUpperCase(Locale.ROOT);
-        List<Map<String, Object>> rows = jdbc.queryForList("""
-            SELECT id, paquete_id, tracking_code, accion, modulo_origen, descripcion,
-                   campo_afectado, valor_anterior, valor_nuevo, usuario, fecha_hora,
-                   batch_id, estado_historial_id, detalle_json
-              FROM paquete_audit_log
-             WHERE tracking_code = ?
-             ORDER BY fecha_hora DESC, id DESC
-            """, t);
+        List<Map<String, Object>> rows = jdbc.queryForList("CALL sp_th_auditoria_historial(?)", t);
 
         List<Map<String, Object>> items = new ArrayList<>();
         for (Map<String, Object> row : rows) {

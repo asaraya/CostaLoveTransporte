@@ -124,7 +124,7 @@ public class PaqueteController {
         }
 
         List<DevolucionRow> rows = paquetes.buscarDevoluciones(
-                PaqueteEstado.NO_ENTREGABLE, sub, desde, hasta, marchamo);
+                PaqueteEstado.NO_ENTREGABLE.name(), sub == null ? null : sub.name(), desde, hasta, marchamo);
 
         return rows.stream().map(r -> {
             Map<String, Object> m = new LinkedHashMap<>();

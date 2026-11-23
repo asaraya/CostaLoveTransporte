@@ -1,3 +1,4 @@
+import { excelDate } from '../utils/reportDates'
 import { useEffect, useState } from 'react'
 import { api, toastErr, toastOk } from '../api'
 import * as XLSX from 'xlsx'
@@ -23,6 +24,7 @@ const FIXED_COLUMNS = [
   'distrito_nombre',
   'ubicacion_codigo',
   'received_at',
+  'registered_at',
   'delivered_at',
   'returned_at',
   'last_state_change_at',
@@ -44,7 +46,8 @@ const HEADERS_ES = {
   devolucion_subtipo: 'Subtipo devolución',
   distrito_nombre: 'Distrito',
   ubicacion_codigo: 'Ubicación',
-  received_at: 'Recepción',
+  received_at: 'Recepción real',
+  registered_at: 'Ingreso al sistema',
   delivered_at: 'Entrega',
   returned_at: 'Devolución',
   last_state_change_at: 'Último cambio',
@@ -234,6 +237,7 @@ function normalizeRow(r) {
     distrito_nombre:       asValue(pick('distrito_nombre', 'distritoNombre')),
     ubicacion_codigo:      asValue(pick('ubicacion_codigo', 'ubicacionCodigo')),
     received_at:           asValue(pick('received_at', 'receivedAt')),
+    registered_at:         asValue(pick('registered_at', 'registeredAt')),
     delivered_at:          asValue(pick('delivered_at', 'deliveredAt')),
     returned_at:           asValue(pick('returned_at', 'returnedAt')),
     last_state_change_at:  asValue(pick('last_state_change_at', 'lastStateChangeAt')),
@@ -538,7 +542,7 @@ export default function Inventario() {
         if (['responsable_consolidado','cambio_en_sistema_por','observaciones'].includes(c)
             && (val == null || String(val).trim() === '')) val = '-'
 
-        obj[prettyHeader(c)] = fmtCell(val)
+        obj[prettyHeader(c)] = ['received_at', 'registered_at', 'delivered_at', 'returned_at', 'last_state_change_at'].includes(c) ? excelDate(val) : fmtCell(val)
       })
       return obj
     })
@@ -584,7 +588,7 @@ export default function Inventario() {
             if (['responsable_consolidado','cambio_en_sistema_por','observaciones'].includes(c)
                 && (val == null || String(val).trim() === '')) val = '-'
 
-            obj[prettyHeader(c)] = fmtCell(val)
+            obj[prettyHeader(c)] = ['received_at', 'registered_at', 'delivered_at', 'returned_at', 'last_state_change_at'].includes(c) ? excelDate(val) : fmtCell(val)
           })
           return obj
         })

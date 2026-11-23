@@ -10,10 +10,10 @@ import com.cargosfsr.inventario.model.PaqueteEstadoHistorial;
 public interface PaqueteEstadoHistorialRepository extends CrudRepository<PaqueteEstadoHistorial, Long> {
 
     @Modifying
-    @Query("DELETE FROM PaqueteEstadoHistorial h WHERE h.paquete.id = :paqueteId")
+    @Query(value = "CALL sp_th_historial_eliminar_paquete(:paqueteId)", nativeQuery = true)
     void deleteByPaqueteId(@Param("paqueteId") Long paqueteId);
 
     @Modifying
-    @Query("DELETE FROM PaqueteEstadoHistorial h WHERE h.paquete.id IN :paqueteIds")
-    int deleteByPaqueteIdIn(@Param("paqueteIds") java.util.Collection<Long> paqueteIds);
+    @Query(value = "CALL sp_th_historial_eliminar_lote(:paqueteIds)", nativeQuery = true)
+    int deleteByPaqueteIdIn(@Param("paqueteIds") String paqueteIds);
 }

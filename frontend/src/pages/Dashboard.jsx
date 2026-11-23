@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
+import ReporteMensajeros from '../components/ReporteMensajeros'
 
 const CR_TZ = 'America/Costa_Rica'
 
@@ -62,6 +63,7 @@ export default function Dashboard() {
   const [matrizMes, setMatrizMes] = useState([])
   const [loadingMes, setLoadingMes] = useState(false)
 
+  const cargaActual = useRef(0)
   const [summary, setSummary] = useState(null)
   const [topDistritos, setTopDistritos] = useState([])
   const [topUbicaciones, setTopUbicaciones] = useState([])
@@ -98,73 +100,28 @@ export default function Dashboard() {
     new Intl.DateTimeFormat('en-CA', { timeZone: CR_TZ }).format(new Date())
   )
   const [tabPF, setTabPF] = useState('RECIBIDOS')
-  const [pfData, setPfData] = useState({
-    recibidos: [],
-    noEntregados: [],
-    entregados: [],
-    noEntregables: [],
-  })
+  const [pfData, setPfData] = useState(null)
   const [pfLoading, setPfLoading] = useState(false)
 
-  const cargarTopDistritos = async (fechaArg = fecha) => {
-    try {
-      const { data } = await api.get('/dashboard/top-distritos', { params: { limit: 500, fecha: fechaArg } })
-      const arr = Array.isArray(data) ? data : []
-      const normalized = arr
-        .map((r) => ({
-          distrito:
-            r?.distrito ??
-            r?.distrito_nombre ??
-            r?.nombre ??
-            '',
-          cantidad: Number(r?.cantidad ?? r?.total ?? r?.count ?? 0) || 0,
-        }))
-        .filter((x) => x.distrito)
-
-      normalized.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0))
-      setTopDistritos(normalized)
-    } catch (e) {
-      alert(e?.response?.data?.message || e?.message || 'Error')
-    }
-  }
-
-  const cargarTopUbicaciones = async (fechaArg = fecha) => {
-    try {
-      const { data } = await api.get('/dashboard/top-ubicaciones', { params: { limit: 500, fecha: fechaArg } })
-      const arr = Array.isArray(data) ? data : []
-      const normalized = arr
-        .map((r) => ({
-          ubicacion:
-            r?.ubicacion ??
-            r?.ubicacion_codigo ??
-            r?.codigo ??
-            r?.nombre ??
-            '',
-          cantidad: Number(r?.cantidad ?? r?.total ?? r?.count ?? 0) || 0,
-        }))
-        .filter((x) => x.ubicacion)
-
-      normalized.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0) || String(a.ubicacion).localeCompare(String(b.ubicacion)))
-      setTopUbicaciones(normalized)
-    } catch (e) {
-      alert(e?.response?.data?.message || e?.message || 'Error')
-    }
-  }
-
   const cargarFecha = async () => {
+    const solicitud = ++cargaActual.current
     setLoading(true)
+    setSummary(null)
+    setTopDistritos([])
+    setTopUbicaciones([])
+    setTopTransportistas([])
+    setUltimosMov([])
     try {
-      const s = await api.get('/dashboard/summary', { params: { fecha } })
-      setSummary(s.data)
-      setLoading(false)
-
-      const [d, u, t, m] = await Promise.all([
+      const [s, d, u, t, m] = await Promise.all([
+        api.get('/dashboard/summary', { params: { fecha } }),
         api.get('/dashboard/top-distritos', { params: { limit: 500, fecha } }),
         api.get('/dashboard/top-ubicaciones', { params: { limit: 500, fecha } }),
         api.get('/dashboard/top-transportistas', { params: { limit: 500, fecha } }),
         api.get('/dashboard/ultimos-movimientos', { params: { fecha, limit: 200 } }),
       ])
 
+      if (solicitud !== cargaActual.current) return
+      setSummary(s.data)
       const dArr = Array.isArray(d.data) ? d.data : []
       const dNorm = dArr
         .map((r) => ({
@@ -188,21 +145,15 @@ export default function Dashboard() {
         mensajero_id: Number(x?.mensajero_id ?? x?.mensajeroId ?? 0) || 0,
         transportista: x?.transportista ?? x?.full_name ?? x?.nombre ?? '',
         cantidad: Number(x?.cantidad ?? x?.total ?? x?.count ?? 0) || 0,
-      })).filter(x => x.transportista && x.mensajero_id)
+      })).filter(x => x.transportista)
       tNorm.sort((a, b) => (b.cantidad ?? 0) - (a.cantidad ?? 0) || String(a.transportista).localeCompare(String(b.transportista)))
       setTopTransportistas(tNorm)
 
-      const movSrc = Array.isArray(m.data) ? m.data : []
-      const movHoy = movSrc.sort((a, b) => {
-        const da = new Date(movFechaOficial(a) ?? 0).getTime()
-        const db = new Date(movFechaOficial(b) ?? 0).getTime()
-        return db - da
-      })
-      setUltimosMov(movHoy)
+      setUltimosMov(Array.isArray(m.data) ? m.data : [])
     } catch (e) {
       alert(e?.response?.data?.message || e?.message || 'Error')
     } finally {
-      setLoading(false)
+      if (solicitud === cargaActual.current) setLoading(false)
     }
   }
 
@@ -335,15 +286,7 @@ export default function Dashboard() {
   const openDistritoModal = async (distrito) => {
     setDistModal({ open: true, distrito, rows: [], loading: true, error: null })
     try {
-      const { data } = await api.get(`/busqueda/distrito/${encodeURIComponent(distrito)}`, {
-        params: {
-          estado: 'ENTREGADO_A_TRANSPORTISTA_LOCAL,NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE,ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'
-        }
-      })
-      const arr = Array.isArray(data) ? data : []
-      const rows = arr
-        .filter(r => ESTADOS_INVENTARIO.has(String(r?.estado ?? '').toUpperCase()))
-        .sort((a, b) => new Date(b?.received_at ?? 0).getTime() - new Date(a?.received_at ?? 0).getTime())
+      const { data: rows } = await api.get('/dashboard/inventario-detalle', { params: { fecha, distrito } })
 
       setDistModal(prev => ({ ...prev, rows, loading: false }))
     } catch (e) {
@@ -360,15 +303,7 @@ export default function Dashboard() {
   const openUbicacionModal = async (ubicacion) => {
     setUbicModal({ open: true, ubicacion, rows: [], loading: true, error: null })
     try {
-      const { data } = await api.get(`/busqueda/ubicacion/${encodeURIComponent(ubicacion)}`, {
-        params: {
-          estado: 'ENTREGADO_A_TRANSPORTISTA_LOCAL,NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE,ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO'
-        }
-      })
-      const arr = Array.isArray(data) ? data : []
-      const rows = arr
-        .filter(r => ESTADOS_INVENTARIO.has(String(r?.estado ?? '').toUpperCase()))
-        .sort((a, b) => new Date(b?.received_at ?? 0).getTime() - new Date(a?.received_at ?? 0).getTime())
+      const { data: rows } = await api.get('/dashboard/inventario-detalle', { params: { fecha, ubicacion } })
 
       setUbicModal(prev => ({ ...prev, rows, loading: false }))
     } catch (e) {
@@ -382,8 +317,8 @@ export default function Dashboard() {
 
   const closeUbicacionModal = () => setUbicModal(prev => ({ ...prev, open: false }))
 
-  const openTransportistaModal = async (mensajeroId, transportista) => {
-    setTransModal({ open: true, mensajeroId, transportista, rows: [], loading: true, error: null })
+  const openTransportistaModal = async (mensajeroId, transportista, total) => {
+    setTransModal({ open: true, mensajeroId, transportista, total, rows: [], loading: true, error: null })
     try {
       const { data } = await api.get('/dashboard/pods-transportista', {
         params: { mensajeroId, limit: 500, fecha }
@@ -414,40 +349,26 @@ export default function Dashboard() {
     return () => window.removeEventListener('keydown', onKey)
   }, [distModal.open, ubicModal.open, transModal.open])
 
-  function movFechaOficial(r) {
-    if (!r) return null
-    const to = String(r.estado_to ?? r.estadoTo ?? '').toUpperCase()
-    if (to === 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' && r.received_at) return r.received_at
-    if (to === 'NO_ENTREGABLE' && r.returned_at) return r.returned_at
-    if (to === 'PRUEBA_DE_ENTREGA' && (r.delivered_at || r.changed_at || r.changedAt)) return (r.delivered_at ?? r.changed_at ?? r.changedAt)
-    return r.changed_at ?? r.changedAt ?? null
-  }
-
   const cargarPorFecha = async () => {
     if (!fechaPF) return
+    setPfData(null)
     setPfLoading(true)
     try {
       const iniISO = toCRISO(fechaPF, '00', '00', '00')
       const finISO = toCRISO(fechaPF, '23', '59', '59')
 
-      const { data } = await api.get('/busqueda/fecha', {
-        params: { tipoFecha: 'RECEPCION', desde: iniISO, hasta: finISO }
-      })
-
-      const recibidos = Array.isArray(data) ? data : []
-
-      const entregados = recibidos.filter(r =>
-        String(r?.estado ?? '').toUpperCase() === 'PRUEBA_DE_ENTREGA'
-      )
-
-      const noEntregados = recibidos.filter(r =>
-        String(r?.estado ?? '').toUpperCase() === 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'
-      )
-
-      const noEntregables = recibidos.filter(r =>
-        String(r?.estado ?? '').toUpperCase() === 'NO_ENTREGABLE'
-      )
-
+      const porFecha = async (tipoFecha, estado) => {
+        const { data } = await api.get('/busqueda/fecha', {
+          params: { tipoFecha, desde: iniISO, hasta: finISO }
+        })
+        return estado ? data.filter(row => row.estado === estado) : data
+      }
+      const [recibidos, entregados, noEntregados, noEntregables] = await Promise.all([
+        porFecha('RECEPCION'),
+        porFecha('ENTREGA', 'PRUEBA_DE_ENTREGA'),
+        porFecha('CAMBIO', 'NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE'),
+        porFecha('DEVOLUCION', 'NO_ENTREGABLE'),
+      ])
       setPfData({ recibidos, entregados, noEntregados, noEntregables })
     } catch (e) {
       alert(e?.response?.data?.message || e?.message || 'Error')
@@ -457,13 +378,19 @@ export default function Dashboard() {
   }
 
   const currentPFRows = (() => {
+    if (!pfData) return []
     if (tabPF === 'ENTREGADOS') return pfData.entregados
     if (tabPF === 'NO_ENTREGADOS') return pfData.noEntregados
     if (tabPF === 'NO_ENTREGABLES') return pfData.noEntregables
     return pfData.recibidos
   })()
 
-  const currentPFDateKey = 'received_at'
+  const [currentPFDateKey, currentPFDateLabel] = {
+    RECIBIDOS: ['received_at', 'Fecha de recepción'],
+    ENTREGADOS: ['delivered_at', 'Fecha de entrega'],
+    NO_ENTREGADOS: ['last_state_change_at', 'Fecha del cambio'],
+    NO_ENTREGABLES: ['returned_at', 'Fecha de devolución'],
+  }[tabPF]
   const inventarioRealHoy = summary ? Number(summary.inventarioFecha ?? summary.inventarioActual ?? calcInventarioDesdeByEstado(summary.byEstado) ?? 0) : 0
   const trACaActual = summary ? countEstadoDesdeByEstado(summary.byEstado, 'TR_A_CA') : 0
   const fmtCell = (v) => (v === null || v === undefined || v === '' ? '-' : v)
@@ -583,7 +510,7 @@ export default function Dashboard() {
                 <tr key={r.mensajero_id ?? i}>
                   <td>
                     <button
-                      onClick={() => openTransportistaModal(r.mensajero_id, r.transportista)}
+                      onClick={() => openTransportistaModal(r.mensajero_id, r.transportista, r.cantidad)}
                       style={{
                         background: 'none', border: 'none', color: '#0b66c3',
                         textDecoration: 'underline', padding: 0, cursor: 'pointer'
@@ -604,11 +531,16 @@ export default function Dashboard() {
         </div>
       </div>
 
+      <div style={{ marginTop: 16 }}><ReporteMensajeros /></div>
+
       <div style={{ marginTop: 16 }}>
         <h4>Ver paquetes por fecha</h4>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
           <label>Fecha:
-            <input type="date" value={fechaPF} onChange={e => setFechaPF(e.target.value)} style={{ marginLeft: 4 }} />
+            <input type="date" disabled={pfLoading} value={fechaPF} onChange={e => {
+              setFechaPF(e.target.value)
+              setPfData(null)
+            }} style={{ marginLeft: 4 }} />
           </label>
           <button onClick={cargarPorFecha} disabled={pfLoading || !fechaPF}>
             {pfLoading ? 'Cargando…' : 'Ver'}
@@ -616,16 +548,16 @@ export default function Dashboard() {
 
           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
             <button onClick={() => setTabPF('RECIBIDOS')} style={tabBtnStyle(tabPF === 'RECIBIDOS')}>
-              Recibidos ({pfData.recibidos.length})
+              Recibidos ({pfData?.recibidos.length ?? '—'})
             </button>
             <button onClick={() => setTabPF('NO_ENTREGADOS')} style={tabBtnStyle(tabPF === 'NO_ENTREGADOS')}>
-              No entregados ({pfData.noEntregados.length})
+              No entregados ({pfData?.noEntregados.length ?? '—'})
             </button>
             <button onClick={() => setTabPF('ENTREGADOS')} style={tabBtnStyle(tabPF === 'ENTREGADOS')}>
-              Entregados (POD) ({pfData.entregados.length})
+              Entregados (POD) ({pfData?.entregados.length ?? '—'})
             </button>
             <button onClick={() => setTabPF('NO_ENTREGABLES')} style={tabBtnStyle(tabPF === 'NO_ENTREGABLES')}>
-              No entregables (Devolución) ({pfData.noEntregables.length})
+              No entregables (Devolución) ({pfData?.noEntregables.length ?? '—'})
             </button>
           </div>
         </div>
@@ -641,14 +573,14 @@ export default function Dashboard() {
                   <th style={th}>Nombre</th>
                   <th style={th}>Descripción</th>
                   <th style={th}>Estado actual</th>
-                  <th style={th}>Fecha recepción (real)</th>
+                  <th style={th}>{currentPFDateLabel}</th>
                 </tr>
               </thead>
               <tbody>
                 {currentPFRows.length === 0 ? (
                   <tr>
                     <td colSpan={7} style={{ padding: 12, textAlign: 'center', opacity: .7 }}>
-                      Sin resultados para la fecha seleccionada
+                      {pfLoading ? 'Cargando…' : pfData ? 'Sin resultados para la fecha seleccionada' : 'Consulta la fecha para ver los paquetes'}
                     </td>
                   </tr>
                 ) : currentPFRows.map((r, idx) => (
@@ -729,7 +661,7 @@ export default function Dashboard() {
       </div>
 
       <div style={{ marginTop: 16 }}>
-        <h4>Movimientos de estado del {fecha}</h4>
+        <h4>Movimientos de estado del {fecha} (últimos 200)</h4>
         <div style={{ maxHeight: 340, overflowY: 'auto' }}>
           <table border="1" cellPadding="6" width="100%">
             <thead>
@@ -747,7 +679,7 @@ export default function Dashboard() {
                   <td>{r.ubicacion_codigo ?? '-'}</td>
                   <td>{labelEstado(r.estado_from ?? '-')}</td>
                   <td>{labelEstado(r.estado_to ?? '-')}</td>
-                  <td>{fmtDT(movFechaOficial(r))}</td>
+                  <td>{fmtDT(r.effective_at)}</td>
                   <td>{r.motivo ?? '-'}</td>
                   <td>{r.changed_by ?? '-'}</td>
                 </tr>
@@ -898,7 +830,7 @@ export default function Dashboard() {
             {!transModal.loading && !transModal.error && (
               <>
                 <div style={{ marginBottom: 8, opacity: .9, color: '#e8f0ff' }}>
-                  Total: {transModal.rows.length}
+                  Paquetes mostrados: {transModal.rows.length} de {transModal.total}
                 </div>
 
                 <div style={{ overflow: 'auto', maxHeight: '65vh', border: '1px solid rgba(255,255,255,.35)', borderRadius: 8, background: '#fff' }}>

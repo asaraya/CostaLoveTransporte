@@ -21,7 +21,7 @@ public class DistritoController {
     @GetMapping
     public List<Map<String,Object>> listar() {
         return jdbc.queryForList(
-            "SELECT id, nombre, activo, created_at FROM distritos ORDER BY nombre ASC"
+            "CALL sp_th_distritos_listar()"
         );
     }
 }

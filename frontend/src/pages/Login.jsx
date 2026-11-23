@@ -1,3 +1,4 @@
+import { APP_NAME } from '../brand.js'
 // src/pages/Login.jsx
 import { useState } from 'react'
 import { useLocation, useNavigate, Link } from 'react-router-dom'
@@ -39,8 +40,8 @@ export default function Login() {
       <div className="auth-card">
         <div className="auth-head">
           <div className="brand">
-            <img src={logoUrl} alt="Cargo FSR" />
-            <strong>Inventario</strong>
+            <img src={logoUrl} alt={APP_NAME} />
+            <strong>{APP_NAME}</strong>
           </div>
           <h1>Iniciar sesión</h1>
         </div>

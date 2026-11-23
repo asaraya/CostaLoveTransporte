@@ -13,8 +13,8 @@
   <groupId>com.cargosfsr</groupId>
   <artifactId>inventario</artifactId>
   <version>0.0.1-SNAPSHOT</version>
-  <name>backend</name>
-  <description>Inventario Cargos FSR</description>
+  <name>costa-love-transporte-backend</name>
+  <description>Inventario CostaLoveTransporte</description>
 
   <properties>
     <java.version>17</java.version>

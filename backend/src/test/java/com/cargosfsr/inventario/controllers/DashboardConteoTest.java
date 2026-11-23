@@ -6,16 +6,29 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import com.cargosfsr.inventario.MysqlPruebas;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import com.cargosfsr.inventario.services.ConsultasService;
 
+@EnabledIfSystemProperty(named = "test.mysql.url", matches = ".+")
 class DashboardConteoTest {
+    private SingleConnectionDataSource dataSource;
     private JdbcTemplate jdbc;
     private DashboardController dashboard;
     private final String day = LocalDate.now().toString();
 
-    @BeforeEach void setup() {
-        jdbc = new JdbcTemplate(new DriverManagerDataSource("jdbc:h2:mem:" + System.nanoTime() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", ""));
+    @AfterEach void close() {
+        if (dataSource != null) dataSource.destroy();
+    }
+
+    @BeforeEach void setup() throws Exception {
+        dataSource = MysqlPruebas.conectar();
+        jdbc = new JdbcTemplate(dataSource);
+        jdbc.execute("DROP VIEW IF EXISTS vw_paquete_resumen, vw_th_eventos_inventario");
+        jdbc.execute("DROP TABLE IF EXISTS paquete_audit_log, paquete_estado_historial, paquetes, usuarios, sacos, distritos");
+        jdbc.execute("CREATE TABLE paquete_audit_log(id BIGINT PRIMARY KEY)");
         jdbc.execute("CREATE TABLE paquetes(id BIGINT PRIMARY KEY, tracking_code VARCHAR(100) UNIQUE, estado VARCHAR(80), devolucion_subtipo VARCHAR(40), received_at TIMESTAMP, delivered_at TIMESTAMP, returned_at TIMESTAMP, last_state_change_at TIMESTAMP, mensajero_id BIGINT, saco_id BIGINT, distrito_id BIGINT, recipient_name VARCHAR(100), recipient_phone VARCHAR(100), recipient_address VARCHAR(100))");
         jdbc.execute("CREATE TABLE paquete_estado_historial(id BIGINT PRIMARY KEY, paquete_id BIGINT, estado_from VARCHAR(80), estado_to VARCHAR(80), changed_at TIMESTAMP, mensajero_id BIGINT)");
         jdbc.execute("CREATE TABLE usuarios(id BIGINT PRIMARY KEY, full_name VARCHAR(100), rol VARCHAR(40))");
@@ -24,6 +37,7 @@ class DashboardConteoTest {
         jdbc.update("INSERT INTO usuarios VALUES(1,'Uno','MENSAJERO'),(2,'Dos','MENSAJERO')");
         jdbc.update("INSERT INTO sacos VALUES(1,'S1',NULL)");
         jdbc.update("INSERT INTO distritos VALUES(1,'Prueba')");
+        MysqlPruebas.migrar(jdbc);
         dashboard = new DashboardController(jdbc);
     }
 
@@ -46,6 +60,37 @@ class DashboardConteoTest {
         assertEquals(1, ranking.stream().mapToInt(r -> ((Number)r.get("cantidad")).intValue()).sum());
         assertEquals(0, dashboard.podsPorTransportista(1,10,day).size());
         assertEquals(1, dashboard.podsPorTransportista(2,10,day).size());
+    }
+
+    @Test void groupsUnassignedAndFormerCouriersWithoutLosingDeliveries() {
+        paquete(1,"PRUEBA_DE_ENTREGA",day+" 10:00:00");
+        paquete(2,"PRUEBA_DE_ENTREGA",day+" 11:00:00");
+        jdbc.update("UPDATE usuarios SET rol='TRANSPORTISTA' WHERE id=2");
+        jdbc.update("UPDATE paquetes SET mensajero_id=NULL WHERE id=1");
+        var ranking = dashboard.topTransportistas(10,day);
+        assertEquals(2, ranking.stream().mapToInt(r -> ((Number)r.get("cantidad")).intValue()).sum());
+        assertEquals(1,dashboard.podsPorTransportista(0,10,day).size());
+        assertEquals(1,dashboard.podsPorTransportista(2,10,day).size());
+    }
+
+    @Test void pastInventoryRemainsOnItsDayAndMovementsDoNotMoveWithThePackage() {
+        String previous = LocalDate.now().minusDays(2).toString();
+        paquete(1,"PRUEBA_DE_ENTREGA",day+" 11:00:00");
+        jdbc.update("UPDATE paquetes SET received_at=? WHERE id=1", previous+" 08:00:00");
+        jdbc.execute("ALTER TABLE paquete_estado_historial ADD motivo VARCHAR(80)");
+        jdbc.execute("ALTER TABLE paquete_estado_historial ADD changed_by VARCHAR(80)");
+        jdbc.execute("CREATE VIEW vw_paquete_resumen AS SELECT id,tracking_code,received_at,'S1' AS marchamo,'Prueba' AS distrito_nombre,'A' AS ubicacion_codigo FROM paquetes");
+        jdbc.update("""
+                INSERT INTO paquete_estado_historial(id,paquete_id,estado_from,estado_to,changed_at)
+                VALUES(1,1,NULL,'ENTREGADO_A_TRANSPORTISTA_LOCAL',?),
+                      (2,1,'ENTREGADO_A_TRANSPORTISTA_LOCAL','PRUEBA_DE_ENTREGA',?),
+                      (3,1,'PRUEBA_DE_ENTREGA','ENTREGADO_A_TRANSPORTISTA_LOCAL',?),
+                      (4,1,'ENTREGADO_A_TRANSPORTISTA_LOCAL','PRUEBA_DE_ENTREGA',?)
+                """,previous+" 08:00:00",previous+" 09:00:00",previous+" 11:00:00",day+" 11:00:00");
+        assertEquals(1L,new ConsultasService(jdbc).reporteDiarioFlat(LocalDate.parse(previous)).get("inventario"));
+        assertEquals(1,dashboard.inventarioDetalle(LocalDate.parse(previous),"Prueba",null).size());
+        assertEquals(3,dashboard.ultimosMovimientos(200,previous).size());
+        assertEquals(1,dashboard.ultimosMovimientos(200,day).size());
     }
 
     @Test void historicalSnapshotUsesEventDateNotLatestDeliveryDate() {

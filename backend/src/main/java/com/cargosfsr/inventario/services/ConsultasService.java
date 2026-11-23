@@ -30,6 +30,10 @@ public class ConsultasService {
 
     private final JdbcTemplate jdbc;
 
+    private List<Map<String, Object>> queryPaquetes(String sql, Object... args) {
+        return FechasPaquete.completar(jdbc, jdbc.queryForList(sql, args));
+    }
+
     public ConsultasService(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }
@@ -39,9 +43,6 @@ public class ConsultasService {
      * - EN_INVENTARIO = cualquier paquete cuyo estado esté en cualquiera de estos 3 estados.
      * - NO_ENTREGABLE (cualquier subtipo) = fuera de inventario.
      */
-    private static final String SQL_ESTADOS_EN_INVENTARIO =
-            "('ENTREGADO_A_TRANSPORTISTA_LOCAL','NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE','ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO')";
-
     private static final List<String> ESTADOS_EN_INVENTARIO = List.of(
             ESTADO_RECIBIDO,
             ESTADO_NO_ENTREGADO,
@@ -57,79 +58,21 @@ public class ConsultasService {
 
     private long countReceivedBetween(Timestamp desde, Timestamp hasta) {
         return countLong(
-                """
-                SELECT COUNT(*)
-                FROM paquetes p
-                WHERE p.received_at >= ?
-                  AND p.received_at < ?
-                """,
+                "CALL sp_th_recibido_contar(?, ?)",
                 desde,
                 hasta);
     }
 
     private long countDistinctEffectiveStateBetween(String estado, Timestamp desde, Timestamp hasta) {
-        String fechaCol = switch (estado) {
-            case ESTADO_POD -> "delivered_at";
-            case ESTADO_NO_ENTREGABLE -> "returned_at";
-            case ESTADO_RECIBIDO, ESTADO_NO_ENTREGADO, ESTADO_SEGUNDO_INTENTO -> "received_at";
-            default -> "last_state_change_at";
-        };
-
-        return countLong(
-                "SELECT COUNT(*) FROM paquetes WHERE estado = ? AND " + fechaCol + " >= ? AND " + fechaCol + " < ?",
-                estado,
-                desde,
-                hasta);
+        return countLong("CALL sp_th_estados_contar_dia(?, ?, ?)", estado, desde, hasta);
     }
 
     private long countDistinctEffectiveReturnSubtypeBetween(String subtipo, Timestamp desde, Timestamp hasta) {
         return countLong(
-                """
-                SELECT COUNT(*)
-                  FROM paquetes p
-                 WHERE p.estado = 'NO_ENTREGABLE'
-                   AND p.devolucion_subtipo = ?
-                   AND p.returned_at >= ?
-                   AND p.returned_at < ?
-                """,
+                "CALL sp_th_devolucion_subtipo_contar(?, ?, ?)",
                 subtipo,
                 desde,
                 hasta);
-    }
-
-    private Map<String, Long> currentByEstado() {
-        Map<String, Long> out = new LinkedHashMap<>();
-        out.put(ESTADO_RECIBIDO, 0L);
-        out.put(ESTADO_NO_ENTREGADO, 0L);
-        out.put(ESTADO_SEGUNDO_INTENTO, 0L);
-        out.put(ESTADO_POD, 0L);
-        out.put(ESTADO_NO_ENTREGABLE, 0L);
-        out.put(ESTADO_TR_A_CA, 0L);
-        out.put("NO_ENTREGABLE__FUERA_DE_RUTA", 0L);
-        out.put("NO_ENTREGABLE__VENCIDOS", 0L);
-        out.put("NO_ENTREGABLE__DOS_INTENTOS", 0L);
-
-        List<Map<String, Object>> rows = jdbc.queryForList(
-                """
-                SELECT p.estado AS estado, p.devolucion_subtipo, COUNT(*) AS cantidad
-                  FROM paquetes p
-                 GROUP BY p.estado, p.devolucion_subtipo
-                """);
-
-        for (Map<String, Object> row : rows) {
-            String estado = String.valueOf(row.get("estado"));
-            long cantidad = row.get("cantidad") instanceof Number n ? n.longValue() : 0L;
-            String subtipo = row.get("devolucion_subtipo") == null ? null : String.valueOf(row.get("devolucion_subtipo"));
-
-            out.put(estado, out.getOrDefault(estado, 0L) + cantidad);
-
-            if (ESTADO_NO_ENTREGABLE.equals(estado) && subtipo != null && !subtipo.isBlank()) {
-                String key = "NO_ENTREGABLE__" + subtipo;
-                out.put(key, out.getOrDefault(key, 0L) + cantidad);
-            }
-        }
-
-        return out;
     }
 
     /**
@@ -183,60 +126,7 @@ public class ConsultasService {
                 ? ESTADO_NO_ENTREGADO
                 : estado.trim().toUpperCase(Locale.ROOT);
 
-        final String selectCols = """
-            SELECT
-                v.id,
-                v.tracking_code,
-                v.recipient_name,
-                v.recipient_address,
-                v.recipient_phone,
-                v.merchandise_value,
-                v.content_description,
-                v.estado,
-                v.devolucion_subtipo,
-                v.received_at,
-                v.delivered_at,
-                v.returned_at,
-                v.last_state_change_at,
-                v.status_externo,
-                v.status_externo_at,
-                v.ultimo_cambio_por,
-                v.responsable_consolidado,
-                v.observaciones,
-                v.saco_id,
-                v.marchamo,
-                v.distrito_id,
-                v.distrito_nombre,
-                v.ubicacion_id,
-                v.ubicacion_codigo,
-                v.ubicacion_tipo,
-                v.mueble,
-                v.estanteria,
-                v.caja,
-                (
-                  SELECT h.changed_by
-                    FROM paquete_estado_historial h
-                   WHERE h.paquete_id = v.id
-                   ORDER BY h.changed_at DESC, h.id DESC
-                   LIMIT 1
-                ) AS last_changed_by
-            FROM vw_paquete_resumen v
-        """;
-
-        if ("TODOS".equals(est)) {
-            final String sql = selectCols + " ORDER BY v.id DESC LIMIT ? OFFSET ?";
-            return jdbc.queryForList(sql, lim, off);
-        }
-
-        // EN_INVENTARIO = 3 estados (no incluye NO_ENTREGABLE)
-        if ("EN_INVENTARIO".equals(est) || "INVENTARIO".equals(est)) {
-            final String sql = selectCols + " WHERE v.estado IN " + SQL_ESTADOS_EN_INVENTARIO +
-                    " ORDER BY v.id DESC LIMIT ? OFFSET ?";
-            return jdbc.queryForList(sql, lim, off);
-        }
-
-        final String sql = selectCols + " WHERE v.estado = ? ORDER BY v.id DESC LIMIT ? OFFSET ?";
-        return jdbc.queryForList(sql, est, lim, off);
+        return queryPaquetes("CALL sp_th_inventario_listar(?, ?, ?)", est, lim, off);
     }
 
     /* ==========================
@@ -249,33 +139,23 @@ public class ConsultasService {
                 ? ESTADO_NO_ENTREGADO
                 : estado.trim().toUpperCase(Locale.ROOT);
 
-        if ("TODOS".equals(est)) {
-            return jdbc.queryForObject("SELECT COUNT(*) FROM paquetes", Long.class);
-        }
-
-        if ("EN_INVENTARIO".equals(est) || "INVENTARIO".equals(est)) {
-            return jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM paquetes WHERE estado IN " + SQL_ESTADOS_EN_INVENTARIO,
-                    Long.class);
-        }
-
-        return jdbc.queryForObject("SELECT COUNT(*) FROM paquetes WHERE estado = ?", Long.class, est);
+        return jdbc.queryForObject("CALL sp_th_inventario_contar(?)", Long.class, est);
     }
 
     @Cacheable(cacheNames = "inventario", key = "'cnt_marchamo:'+ #marchamo")
     public long countPorMarchamo(String marchamo) {
-        return jdbc.queryForObject("SELECT COUNT(*) FROM vw_paquete_resumen WHERE marchamo = ?", Long.class, marchamo);
+        return jdbc.queryForObject("CALL sp_th_contar_marchamo(?)", Long.class, marchamo);
     }
 
     @Cacheable(cacheNames = "inventario", key = "'cnt_distrito:'+ #nombre")
     public long countPorDistritoNombre(String nombre) {
-        return jdbc.queryForObject("SELECT COUNT(*) FROM vw_paquete_resumen WHERE distrito_nombre = ?",
+        return jdbc.queryForObject("CALL sp_th_contar_distrito(?)",
                 Long.class, nombre);
     }
 
     @Cacheable(cacheNames = "inventario", key = "'cnt_ubicacion:'+ #codigo")
     public long countPorUbicacionCodigo(String codigo) {
-        return jdbc.queryForObject("SELECT COUNT(*) FROM vw_paquete_resumen WHERE ubicacion_codigo = ?",
+        return jdbc.queryForObject("CALL sp_th_contar_ubicacion(?)",
                 Long.class, codigo);
     }
 
@@ -283,10 +163,10 @@ public class ConsultasService {
     public long countPorTracking(String q, int like) {
         if (like == 1) {
             return jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM vw_paquete_resumen WHERE tracking_code LIKE CONCAT('%', ?, '%')",
+                    "CALL sp_th_contar_tracking_parcial(?)",
                     Long.class, q);
         }
-        return jdbc.queryForObject("SELECT COUNT(*) FROM vw_paquete_resumen WHERE tracking_code = ?",
+        return jdbc.queryForObject("CALL sp_th_contar_tracking_exacto(?)",
                 Long.class, q);
     }
 
@@ -294,10 +174,10 @@ public class ConsultasService {
     public long countPorNombre(String q, int like) {
         if (like == 1) {
             return jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM vw_paquete_resumen WHERE recipient_name LIKE CONCAT('%', ?, '%')",
+                    "CALL sp_th_contar_nombre_parcial(?)",
                     Long.class, q);
         }
-        return jdbc.queryForObject("SELECT COUNT(*) FROM vw_paquete_resumen WHERE recipient_name = ?",
+        return jdbc.queryForObject("CALL sp_th_contar_nombre_exacto(?)",
                 Long.class, q);
     }
 
@@ -305,10 +185,10 @@ public class ConsultasService {
     public long countPorDireccion(String q, int like) {
         if (like == 1) {
             return jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM vw_paquete_resumen WHERE recipient_address LIKE CONCAT('%', ?, '%')",
+                    "CALL sp_th_contar_direccion_parcial(?)",
                     Long.class, q);
         }
-        return jdbc.queryForObject("SELECT COUNT(*) FROM vw_paquete_resumen WHERE recipient_address = ?",
+        return jdbc.queryForObject("CALL sp_th_contar_direccion_exacta(?)",
                 Long.class, q);
     }
 
@@ -320,7 +200,7 @@ public class ConsultasService {
         Timestamp pDesde = ts(desde);
         Timestamp pHasta = ts(hasta);
         String pMarchamo = (marchamo == null || marchamo.isBlank()) ? null : marchamo;
-        return jdbc.queryForList("CALL sp_paquetes_entregados(?, ?, ?)", pDesde, pHasta, pMarchamo);
+        return queryPaquetes("CALL sp_paquetes_entregados(?, ?, ?)", pDesde, pHasta, pMarchamo);
     }
 
     public List<Map<String, Object>> devolucion(Instant desde, Instant hasta, String marchamo, String subtipo) {
@@ -328,7 +208,7 @@ public class ConsultasService {
         Timestamp pHasta = ts(hasta);
         String pMarchamo = (marchamo == null || marchamo.isBlank()) ? null : marchamo;
         String pSubtipo  = (subtipo  == null || subtipo.isBlank())  ? "ALL" : subtipo.toUpperCase(Locale.ROOT);
-        return jdbc.queryForList("CALL sp_paquetes_devolucion(?, ?, ?, ?)", pDesde, pHasta, pMarchamo, pSubtipo);
+        return queryPaquetes("CALL sp_paquetes_devolucion(?, ?, ?, ?)", pDesde, pHasta, pMarchamo, pSubtipo);
     }
 
     /* ==========================
@@ -340,30 +220,30 @@ public class ConsultasService {
         Timestamp pDesde = ts(desde);
         Timestamp pHasta = ts(hasta);
         String pTipo = (tipoFecha == null ? "CAMBIO" : tipoFecha);
-        return jdbc.queryForList("CALL sp_paquetes_por_estado(?, ?, ?, ?)", estado, pTipo, pDesde, pHasta);
+        return queryPaquetes("CALL sp_paquetes_por_estado(?, ?, ?, ?)", estado, pTipo, pDesde, pHasta);
     }
 
     @Cacheable(cacheNames = "inventario", key = "'distrito:'+ #nombre")
     public List<Map<String, Object>> porDistritoNombre(String nombre) {
         // SP: (p_distrito_nombre, p_tipo_fecha, p_desde, p_hasta, p_estado)
-        return jdbc.queryForList("CALL sp_paquetes_por_distrito(?, ?, ?, ?, ?)", nombre, null, null, null, null);
+        return queryPaquetes("CALL sp_paquetes_por_distrito(?, ?, ?, ?, ?)", nombre, null, null, null, null);
     }
 
     @Cacheable(cacheNames = "inventario", key = "'ubic:'+ #codigo")
     public List<Map<String, Object>> porUbicacionCodigo(String codigo) {
-        return jdbc.queryForList("CALL sp_paquetes_por_ubicacion(?, ?, ?, ?, ?)", codigo, null, null, null, null);
+        return queryPaquetes("CALL sp_paquetes_por_ubicacion(?, ?, ?, ?, ?)", codigo, null, null, null, null);
     }
 
     @Cacheable(cacheNames = "busquedas", key = "'nom_exact_like:'+ #nombre +':'+ #like")
     public List<Map<String, Object>> porNombre(String nombre, int like) {
         int pLike = like == 0 ? 0 : 1;
         if (pLike == 1) {
-            return jdbc.queryForList(
-                    "SELECT * FROM vw_paquete_resumen WHERE recipient_name LIKE CONCAT('%', ?, '%') ORDER BY id DESC",
+            return queryPaquetes(
+                    "CALL sp_th_buscar_nombre_parcial(?)",
                     nombre);
         }
-        return jdbc.queryForList(
-                "SELECT * FROM vw_paquete_resumen WHERE recipient_name = ? ORDER BY id DESC",
+        return queryPaquetes(
+                "CALL sp_th_buscar_nombre_exacto(?)",
                 nombre);
     }
 
@@ -376,7 +256,7 @@ public class ConsultasService {
     public List<Map<String, Object>> porDireccion(String dir, int like) {
         int pLike = like == 0 ? 0 : 1;
         // SP existe en tu schema nuevo
-        return jdbc.queryForList("CALL sp_paquetes_por_direccion(?, ?)", dir, pLike);
+        return queryPaquetes("CALL sp_paquetes_por_direccion(?, ?)", dir, pLike);
     }
 
     @Cacheable(cacheNames = "busquedas", key = "'dir:'+ #dir")
@@ -388,18 +268,18 @@ public class ConsultasService {
     public List<Map<String, Object>> porTracking(String tracking, int like) {
         int pLike = like == 0 ? 0 : 1;
         if (pLike == 1) {
-            return jdbc.queryForList(
-                    "SELECT * FROM vw_paquete_resumen WHERE tracking_code LIKE CONCAT('%', ?, '%') ORDER BY id DESC",
+            return queryPaquetes(
+                    "CALL sp_th_buscar_tracking_parcial(?)",
                     tracking);
         }
-        return jdbc.queryForList(
-                "SELECT * FROM vw_paquete_resumen WHERE tracking_code = ? ORDER BY id DESC",
+        return queryPaquetes(
+                "CALL sp_th_buscar_tracking_exacto(?)",
                 tracking);
     }
 
     @Cacheable(cacheNames = "busquedas", key = "'trk:'+ #patron")
     public List<Map<String, Object>> porTrackingLike(String patron) {
-        return jdbc.queryForList("CALL sp_buscar_tracking_like(?)", patron);
+        return queryPaquetes("CALL sp_buscar_tracking_like(?)", patron);
     }
 
     @Cacheable(cacheNames = "inventario", key = "'fecha:'+ #tipoFecha + ':' + #desde + ':' + #hasta")
@@ -407,7 +287,7 @@ public class ConsultasService {
         Timestamp pDesde = ts(desde);
         Timestamp pHasta = ts(hasta);
         String pTipo = (tipoFecha == null ? "CAMBIO" : tipoFecha);
-        return jdbc.queryForList("CALL sp_paquetes_por_fecha(?, ?, ?)", pTipo, pDesde, pHasta);
+        return queryPaquetes("CALL sp_paquetes_por_fecha(?, ?, ?)", pTipo, pDesde, pHasta);
     }
 
     @Cacheable(cacheNames = "inventario", key = "'mch:'+ #marchamo + ':' + #estado + ':' + #tipoFecha + ':' + #desde + ':' + #hasta")
@@ -415,13 +295,13 @@ public class ConsultasService {
         Timestamp pDesde = ts(desde);
         Timestamp pHasta = ts(hasta);
         String pTipo = (tipoFecha == null ? "CAMBIO" : tipoFecha);
-        return jdbc.queryForList("CALL sp_paquetes_por_marchamo(?, ?, ?, ?, ?)", marchamo, estado, pTipo, pDesde, pHasta);
+        return queryPaquetes("CALL sp_paquetes_por_marchamo(?, ?, ?, ?, ?)", marchamo, estado, pTipo, pDesde, pHasta);
     }
 
     /** Detalle simple por tracking */
     @Cacheable(cacheNames = "busquedas", key = "'det_simple:'+ #tracking")
     public List<Map<String, Object>> detallePorTracking(String tracking) {
-        return jdbc.queryForList("CALL sp_tracking_distrito(?)", tracking);
+        return queryPaquetes("CALL sp_tracking_distrito(?)", tracking);
     }
 
     /** Detalle + historial por tracking (SP con 2 result sets). */
@@ -460,13 +340,13 @@ public class ConsultasService {
 
         // Caso sin filtro de estado: llama la SP tal cual (p_estado = null)
         if (estados == null || estados.isEmpty()) {
-            return jdbc.queryForList("CALL sp_paquetes_por_distrito(?, ?, ?, ?, ?)",
+            return queryPaquetes("CALL sp_paquetes_por_distrito(?, ?, ?, ?, ?)",
                     nombre, pTipo, pDesde, pHasta, null);
         }
 
         // Un solo estado: igual que antes
         if (estados.size() == 1) {
-            return jdbc.queryForList("CALL sp_paquetes_por_distrito(?, ?, ?, ?, ?)",
+            return queryPaquetes("CALL sp_paquetes_por_distrito(?, ?, ?, ?, ?)",
                     nombre, pTipo, pDesde, pHasta, estados.get(0));
         }
 
@@ -492,7 +372,7 @@ public class ConsultasService {
         // Orden razonable (si viene id): DESC
         merged.sort((a, b) -> Long.compare(asLong(b.get("id")), asLong(a.get("id"))));
 
-        return merged;
+        return FechasPaquete.completar(jdbc, merged);
     }
 
     @Cacheable(cacheNames = "inventario",
@@ -510,11 +390,11 @@ public class ConsultasService {
         List<String> estados = parseEstados(estado);
 
         if (estados == null || estados.isEmpty()) {
-            return jdbc.queryForList("CALL sp_paquetes_por_ubicacion(?, ?, ?, ?, ?)",
+            return queryPaquetes("CALL sp_paquetes_por_ubicacion(?, ?, ?, ?, ?)",
                     codigo, pTipo, pDesde, pHasta, null);
         }
         if (estados.size() == 1) {
-            return jdbc.queryForList("CALL sp_paquetes_por_ubicacion(?, ?, ?, ?, ?)",
+            return queryPaquetes("CALL sp_paquetes_por_ubicacion(?, ?, ?, ?, ?)",
                     codigo, pTipo, pDesde, pHasta, estados.get(0));
         }
 
@@ -531,7 +411,7 @@ public class ConsultasService {
         }
         List<Map<String, Object>> merged = new ArrayList<>(uniq.values());
         merged.sort((a, b) -> Long.compare(asLong(b.get("id")), asLong(a.get("id"))));
-        return merged;
+        return FechasPaquete.completar(jdbc, merged);
     }
 
     @Cacheable(cacheNames = "inventario", key = "'cnt_distrito:'+ #nombre")
@@ -540,18 +420,16 @@ public class ConsultasService {
         return countPorDistritoNombre(nombre);
     }
 
-    /** Reporte diario FLAT usado por el Dashboard: inventario/total usan estado actual. */
+    /** Reporte diario FLAT usado por el Dashboard: inventario/total corresponden al cierre del día. */
     public Map<String, Object> reporteDiarioFlat(LocalDate fecha) {
         if (fecha == null) return Map.of();
 
         Timestamp dIni = Timestamp.valueOf(fecha.atStartOfDay());
         Timestamp dFin = Timestamp.valueOf(fecha.plusDays(1).atStartOfDay());
 
-        Map<String, Long> current = currentByEstado();
-
-        long inventarioActual = current.getOrDefault(ESTADO_RECIBIDO, 0L)
-                + current.getOrDefault(ESTADO_NO_ENTREGADO, 0L)
-                + current.getOrDefault(ESTADO_SEGUNDO_INTENTO, 0L);
+        long inventarioAlCierre = InventarioAlCierre.porEstado(jdbc, fecha).stream()
+                .filter(row -> ESTADOS_EN_INVENTARIO.contains(row.get("estado")))
+                .mapToLong(row -> ((Number)row.get("cantidad")).longValue()).sum();
 
         long recibido = countReceivedBetween(dIni, dFin);
         long entregado = countDistinctEffectiveStateBetween(ESTADO_POD, dIni, dFin);
@@ -563,7 +441,7 @@ public class ConsultasService {
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("fecha", fecha.toString());
-        out.put("inventario", inventarioActual);
+        out.put("inventario", inventarioAlCierre);
         out.put("recibido", recibido);
         out.put("entregado", entregado);
         out.put("no_entregable", noEntregable);
@@ -571,7 +449,7 @@ public class ConsultasService {
         out.put("vencidos", vencidos);
         out.put("dos_intentos", dosIntentos);
         out.put("tr_a_ca", trACa);
-        out.put("total", inventarioActual);
+        out.put("total", inventarioAlCierre);
         return out;
     }
 }

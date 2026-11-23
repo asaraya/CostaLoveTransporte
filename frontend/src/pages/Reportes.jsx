@@ -1,3 +1,4 @@
+import { reportDateFields, excelDate } from '../utils/reportDates'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import * as XLSX from 'xlsx'
@@ -39,7 +40,11 @@ const FIXED_HEADERS = {
   devolucion_subtipo: 'SUBTIPO DEVOLUCION',
   telefono: 'TELEFONO',
   direccion: 'DIRECCION',
-  fecha: 'FECHA',
+  received_at: 'Recepción real',
+  registered_at: 'Ingreso al sistema',
+  delivered_at: 'Entrega real',
+  delivery_days: 'Días reales hasta entrega',
+  fecha: 'Fecha del estado',
 }
 
 const FIXED_KEYS = [
@@ -52,6 +57,10 @@ const FIXED_KEYS = [
   'devolucion_subtipo',
   'telefono',
   'direccion',
+  'received_at',
+  'registered_at',
+  'delivered_at',
+  'delivery_days',
   'fecha',
 ]
 
@@ -66,6 +75,10 @@ const FIXED_KEYS_XLSX = [
   'devolucion_subtipo',
   'telefono',
   'direccion',
+  'received_at',
+  'registered_at',
+  'delivered_at',
+  'delivery_days',
   'fecha',
 ]
 
@@ -293,7 +306,7 @@ export default function Reportes() {
   }
 
   // Proyección fija para tablas/export
-  const projectRows = (rows, dateKey) => {
+  const projectRows = (rows, dateKey, excel = false) => {
     return (rows || []).map(r => ({
       marchamo: r?.marchamo ?? '-',
       mueble: r?.ubicacion_codigo ?? '-',
@@ -306,13 +319,14 @@ export default function Reportes() {
         : '-',
       telefono: r?.recipient_phone ?? '-',
       direccion: r?.recipient_address ?? '-',
-      fecha: fmtDMY(r?.[dateKey]),
+      ...reportDateFields(r, excel),
+      fecha: excel ? excelDate(r?.[dateKey]) : fmtDMY(r?.[dateKey]),
     }))
   }
 
   const generarReporte = () => {
     const addSheetFixed = (wb, nombre, filas, dateKey) => {
-      const base = projectRows(filas, dateKey)
+      const base = projectRows(filas, dateKey, true)
       const withIntranet = base.map(d => ({
         ...d,
         tracking_intranet: (d.tracking && d.tracking !== '-') ? `${d.tracking},` : '-',
@@ -535,6 +549,7 @@ function DataTable({ rows, dateKey }) {
       : '-',
     telefono: r?.recipient_phone ?? '-',
     direccion: r?.recipient_address ?? '-',
+    ...reportDateFields(r),
     fecha: fmtDMY(r?.[dateKey]),
   }))
 

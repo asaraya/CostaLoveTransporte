@@ -72,8 +72,8 @@ public class RegistroService {
 
     /** Inicializa la sesión SQL con TZ CR y el usuario para triggers */
     private void initDbSession(String who) {
-        em.createNativeQuery("SET time_zone = '-06:00'").executeUpdate();
-        em.createNativeQuery("SET @changed_by := :who")
+        em.createNativeQuery("CALL sp_th_sesion_zona_cr()").executeUpdate();
+        em.createNativeQuery("CALL sp_th_sesion_usuario(:who)")
           .setParameter("who", who)
           .executeUpdate();
     }
@@ -133,18 +133,12 @@ public class RegistroService {
         try {
             initDbSession(actor());
             paquetes.save(p);
-            auditService.registrarCreacion(p, "RECEPCION", actor());
 
             // Ajuste de hora en BD: mover -6h (DB hace la conversión)
-            em.createNativeQuery("""
-                UPDATE paquetes
-                   SET received_at = CASE WHEN received_at IS NOT NULL
-                                          THEN DATE_SUB(received_at, INTERVAL 6 HOUR)
-                                          ELSE received_at END,
-                       last_state_change_at = DATE_SUB(last_state_change_at, INTERVAL 6 HOUR)
-                 WHERE id = :id
-            """).setParameter("id", p.getId())
+            em.createNativeQuery("CALL sp_th_paquete_normalizar_recepcion(:id)").setParameter("id", p.getId())
               .executeUpdate();
+            // Capturar la recepción efectiva después de normalizarla a la hora local.
+            auditService.registrarCreacion(p, "RECEPCION", actor());
 
         } catch (DataIntegrityViolationException ex) {
             String msg = ex.getMessage();
@@ -243,7 +237,7 @@ public class RegistroService {
         }
 
         if (!ids.isEmpty()) {
-            historial.deleteByPaqueteIdIn(ids);
+            historial.deleteByPaqueteIdIn(ParametrosJson.lista(ids));
             paquetes.deleteAllByIdInBatch(ids);
         }
 

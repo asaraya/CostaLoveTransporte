@@ -34,8 +34,7 @@ public class AdminController {
     @GetMapping("/users")
     public List<Map<String, Object>> listUsers() {
         return jdbc.queryForList(
-            "SELECT id, username, full_name, role, active, created_at " +
-            "FROM usuarios ORDER BY id DESC"
+            "CALL sp_th_usuarios_listar()"
         );
     }
 
@@ -97,14 +96,14 @@ public class AdminController {
         String u = normUsername(username);
         String role;
         try {
-            role = jdbc.queryForObject("SELECT role FROM usuarios WHERE username=?", String.class, u);
+            role = jdbc.queryForObject("CALL sp_th_usuario_rol(?)", String.class, u);
         } catch (EmptyResultDataAccessException ex) {
             return Map.of("ok", false, "message", "Usuario no existe");
         }
         if ("ADMIN".equalsIgnoreCase(role)) {
             return Map.of("ok", false, "message", "No se puede eliminar un usuario ADMIN");
         }
-        int rows = jdbc.update("DELETE FROM usuarios WHERE username=?", u);
+        int rows = jdbc.update("CALL sp_th_usuario_eliminar(?)", u);
         return Map.of("ok", rows > 0);
     }
 
@@ -119,7 +118,7 @@ public class AdminController {
 
         try {
             Map<String, Object> existing = jdbc.queryForMap(
-                "SELECT id, nombre, activo FROM distritos WHERE nombre = ? LIMIT 1",
+                "CALL sp_th_distrito_buscar(?)",
                 nombre
             );
 
@@ -129,7 +128,7 @@ public class AdminController {
             }
 
             Long id = toLong(existing.get("id"));
-            int updated = jdbc.update("UPDATE distritos SET activo = 1 WHERE id = ?", id);
+            int updated = jdbc.update("CALL sp_th_distrito_reactivar(?)", id);
             return Map.of(
                 "ok", updated > 0,
                 "reactivado", true,
@@ -139,9 +138,9 @@ public class AdminController {
 
         } catch (EmptyResultDataAccessException ex) {
             try {
-                jdbc.update("INSERT INTO distritos (nombre) VALUES (?)", nombre);
+                jdbc.update("CALL sp_th_distrito_crear(?)", nombre);
                 Long id = jdbc.queryForObject(
-                    "SELECT id FROM distritos WHERE nombre=? LIMIT 1",
+                    "CALL sp_th_distrito_id(?)",
                     Long.class,
                     nombre
                 );
@@ -166,7 +165,7 @@ public class AdminController {
         String nombreDb;
         try {
             Map<String, Object> row = jdbc.queryForMap(
-                "SELECT id, nombre, activo FROM distritos WHERE nombre=? LIMIT 1",
+                "CALL sp_th_distrito_buscar(?)",
                 n
             );
             id = toLong(row.get("id"));
@@ -177,14 +176,14 @@ public class AdminController {
         }
 
         Long usados = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM paquetes WHERE distrito_id=?",
+            "CALL sp_th_distrito_contar_paquetes(?)",
             Long.class,
             id
         );
         long count = (usados == null) ? 0 : usados;
 
         if (count > 0) {
-            int upd = jdbc.update("UPDATE distritos SET activo=0 WHERE id=?", id);
+            int upd = jdbc.update("CALL sp_th_distrito_desactivar(?)", id);
             return Map.of(
                 "ok", upd > 0,
                 "deleted", false,
@@ -196,7 +195,7 @@ public class AdminController {
             );
         }
 
-        int del = jdbc.update("DELETE FROM distritos WHERE id=?", id);
+        int del = jdbc.update("CALL sp_th_distrito_eliminar(?)", id);
         return Map.of(
             "ok", del > 0,
             "deleted", true,
@@ -210,7 +209,7 @@ public class AdminController {
     @GetMapping("/distritos")
     public List<Map<String, Object>> listDistritosAdmin() {
         return jdbc.queryForList(
-            "SELECT id, nombre, activo, created_at FROM distritos ORDER BY nombre ASC"
+            "CALL sp_th_distritos_listar()"
         );
     }
 
@@ -228,15 +227,7 @@ public class AdminController {
         for (int est = 1; est <= req.estanterias; est++) {
             String codigo = "M " + req.mueble + "'" + est;
 
-            jdbc.update("""
-                INSERT INTO ubicacion(tipo, mueble_num, estanteria_num, codigo, activo)
-                VALUES ('MUEBLE', ?, ?, ?, 1)
-                ON DUPLICATE KEY UPDATE
-                tipo = 'MUEBLE',
-                mueble_num = ?,
-                estanteria_num = ?,
-                activo = 1
-                """,
+            jdbc.update("CALL sp_th_ubicacion_guardar(?, ?, ?, ?, ?)",
                 req.mueble, est, codigo,
                 req.mueble, est
             );
@@ -256,13 +247,10 @@ public class AdminController {
             throw new IllegalArgumentException("Número de mueble inválido");
         }
 
-        jdbc.update("""
-            INSERT IGNORE INTO ubicacion(tipo, codigo, activo)
-            VALUES ('MUEBLE', 'PENDIENTE', 1)
-            """);
+        jdbc.update("CALL sp_th_ubicacion_crear_pendiente()");
 
         Long pendienteId = jdbc.queryForObject(
-            "SELECT id FROM ubicacion WHERE codigo = 'PENDIENTE' LIMIT 1",
+            "CALL sp_th_ubicacion_pendiente_id()",
             Long.class
         );
 
@@ -271,35 +259,23 @@ public class AdminController {
         }
 
         Integer ubicaciones = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM ubicacion WHERE tipo = 'MUEBLE' AND mueble_num = ?",
+            "CALL sp_th_mueble_contar(?)",
             Integer.class,
             mueble
         );
 
-        int paquetesMovidos = jdbc.update("""
-            UPDATE paquetes p
-            JOIN ubicacion u ON u.id = p.ubicacion_id
-            SET p.ubicacion_id = ?
-            WHERE u.tipo = 'MUEBLE'
-            AND u.mueble_num = ?
-            """,
+        int paquetesMovidos = jdbc.update("CALL sp_th_mueble_reubicar_paquetes(?, ?)",
             pendienteId,
             mueble
         );
 
-        jdbc.update("""
-            UPDATE sacos s
-            JOIN ubicacion u ON u.id = s.default_ubicacion_id
-            SET s.default_ubicacion_id = ?
-            WHERE u.tipo = 'MUEBLE'
-            AND u.mueble_num = ?
-            """,
+        jdbc.update("CALL sp_th_mueble_reubicar_sacos(?, ?)",
             pendienteId,
             mueble
         );
 
         int ubicacionesEliminadas = jdbc.update(
-            "DELETE FROM ubicacion WHERE tipo = 'MUEBLE' AND mueble_num = ?",
+            "CALL sp_th_mueble_eliminar(?)",
             mueble
         );
 

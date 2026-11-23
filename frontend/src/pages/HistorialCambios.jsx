@@ -1,17 +1,7 @@
+import { formatReportDate } from '../utils/reportDates'
 import { useState } from 'react'
 import { api } from '../api'
 
-function fmtDate(value) {
-  if (!value) return '—'
-  try {
-    return new Date(value).toLocaleString('es-CR', {
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit'
-    })
-  } catch {
-    return String(value)
-  }
-}
 
 function val(value) {
   return value === null || value === undefined || value === '' ? '—' : String(value)
@@ -209,11 +199,18 @@ export default function HistorialCambios() {
                   </div>
                 </div>
                 <div style={{ color: '#64748b', whiteSpace: 'nowrap', fontSize: 13 }}>
-                  {fmtDate(it.fecha_hora)}
+                  <div>{it.modulo_origen === 'HISTORIAL_EXISTENTE' ? 'Fecha del historial original' : 'Registrado en el sistema'}</div>
+                  {formatReportDate(it.fecha_hora, true)}
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))', gap: 12, marginTop: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginTop: 14 }}>
+                <div>
+                  <div style={labelStyle}>{it.accion === 'CREACION_PAQUETE' ? 'Recepción real' : 'Fecha efectiva del cambio'}</div>
+                  <div style={valueStyle}>{formatReportDate(it.effective_at || it.received_at_reference)}</div>
+                  {!it.effective_at && it.received_at_reference && <small>Fecha de recepción actual del paquete</small>}
+                  {!it.effective_at && !it.received_at_reference && <small>Sin fecha efectiva registrada</small>}
+                </div>
                 <div>
                   <div style={labelStyle}>Usuario</div>
                   <div style={valueStyle}>{val(it.usuario)}</div>

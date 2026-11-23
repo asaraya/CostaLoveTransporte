@@ -1,8 +1,6 @@
 package com.cargosfsr.inventario.repository;
 
 import java.time.Instant;
-import jakarta.persistence.LockModeType;
-import org.springframework.data.jpa.repository.Lock;
 import java.util.List;
 import java.util.Optional;
 
@@ -22,8 +20,7 @@ public interface PaqueteRepository extends JpaRepository<Paquete, Long> {
     Optional<Paquete> findByTrackingCode(String trackingCode);
 
     /** Serializa cambios concurrentes del mismo paquete dentro de la transacción. */
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("select p from Paquete p where p.trackingCode = :tracking")
+    @Query(value = "CALL sp_th_bloquear_tracking(:tracking)", nativeQuery = true)
     Optional<Paquete> findByTrackingCodeForUpdate(@Param("tracking") String tracking);
 
     boolean existsByTrackingCode(String trackingCode);
@@ -41,11 +38,6 @@ public interface PaqueteRepository extends JpaRepository<Paquete, Long> {
 
     // ===== consultas para eliminación masiva =====
     List<Paquete> findByTrackingCodeIn(java.util.Collection<String> trackings);
-
-    @Modifying
-    @Transactional
-    @Query("DELETE FROM Paquete p WHERE p.trackingCode IN :trackings")
-    int deleteByTrackingCodeIn(@Param("trackings") java.util.Collection<String> trackings);
 
     /** Cuenta paquetes por marchamo del saco asociado. */
     long countBySaco_Marchamo(String marchamo);
@@ -71,34 +63,9 @@ public interface PaqueteRepository extends JpaRepository<Paquete, Long> {
         String getUbicacionCodigo();
     }
 
-    @Query("""
-        select p.id as id,
-               p.trackingCode as trackingCode,
-               p.estado as estado,
-               p.devolucionSubtipo as devolucionSubtipo,
-               p.receivedAt as receivedAt,
-               p.deliveredAt as deliveredAt,
-               p.returnedAt as returnedAt,
-               p.lastStateChangeAt as lastStateChangeAt,
-               p.recipientName as recipientName,
-               p.recipientPhone as recipientPhone,
-               p.recipientAddress as recipientAddress,
-               s.marchamo as marchamo,
-               d.nombre as distritoNombre,
-               u.codigo as ubicacionCodigo
-        from Paquete p
-          join p.saco s
-          join p.distrito d
-          join p.ubicacion u
-        where p.estado = :estado
-          and (:subtipo is null or p.devolucionSubtipo = :subtipo)
-          and (:desde is null or p.returnedAt >= :desde)
-          and (:hasta is null or p.returnedAt < :hasta)
-          and (:marchamo is null or s.marchamo = :marchamo)
-        order by p.returnedAt desc, p.id desc
-    """)
-    List<DevolucionRow> buscarDevoluciones(@Param("estado") PaqueteEstado estado,
-                                           @Param("subtipo") DevolucionSubtipo subtipo,
+    @Query(value = "CALL sp_th_devoluciones_listar(:estado, :subtipo, :desde, :hasta, :marchamo)", nativeQuery = true)
+    List<DevolucionRow> buscarDevoluciones(@Param("estado") String estado,
+                                           @Param("subtipo") String subtipo,
                                            @Param("desde") Instant desde,
                                            @Param("hasta") Instant hasta,
                                            @Param("marchamo") String marchamo);

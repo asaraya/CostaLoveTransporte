@@ -1,6 +1,7 @@
 package com.cargosfsr.inventario.controllers;
 
 import java.util.List;
+import com.cargosfsr.inventario.services.FechasPaquete;
 import java.util.Map;
 
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -31,15 +32,10 @@ public class VigenciaController {
             d2 = (hasta == null ? d1 : hasta);
             if (d1 > d2) { int t = d1; d1 = d2; d2 = t; }
         }
-        return jdbc.queryForList(
-            "SELECT * " +
-            "FROM vw_paquete_resumen v " +
-            "WHERE v.estado='NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' " +
-            "  AND DATEDIFF(CURDATE(), DATE(v.received_at)) BETWEEN ? AND ? " +
-            "ORDER BY v.received_at ASC, v.id ASC " +
-            "LIMIT ? OFFSET ?",
+        return FechasPaquete.completar(jdbc, jdbc.queryForList(
+            "CALL sp_th_vigencia_listar(?, ?, ?, ?)",
             d1, d2, limit, offset
-        );
+        ));
     }
 
     @GetMapping("/busqueda/vigencia/count")
@@ -56,10 +52,7 @@ public class VigenciaController {
             if (d1 > d2) { int t = d1; d1 = d2; d2 = t; }
         }
         Long total = jdbc.queryForObject(
-            "SELECT COUNT(*) " +
-            "FROM vw_paquete_resumen v " +
-            "WHERE v.estado='NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' " +
-            "  AND DATEDIFF(CURDATE(), DATE(v.received_at)) BETWEEN ? AND ?",
+            "CALL sp_th_vigencia_contar(?, ?)",
             Long.class, d1, d2
         );
         return Map.of("total", total == null ? 0 : total);
