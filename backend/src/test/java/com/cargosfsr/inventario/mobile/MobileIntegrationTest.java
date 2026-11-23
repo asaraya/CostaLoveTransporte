@@ -7,6 +7,8 @@ import java.time.Instant;
 import java.util.UUID;
 import com.cargosfsr.inventario.MysqlPruebas;
 import com.cargosfsr.inventario.auth.CurrentUser;
+import com.cargosfsr.inventario.auth.AdminController;
+import com.cargosfsr.inventario.controllers.ApiExceptionHandler;
 import com.cargosfsr.inventario.config.WebConfig;
 import com.cargosfsr.inventario.services.EstadoService;
 import com.cargosfsr.inventario.services.PaqueteAuditService;
@@ -39,7 +41,8 @@ class MobileIntegrationTest {
     @EntityScan("com.cargosfsr.inventario.model")
     @EnableJpaRepositories("com.cargosfsr.inventario.repository")
     @Import({MobileController.class, MobileAuth.class, MobilePodService.class, MobileErrors.class,
-            MobileWebConfig.class, WebConfig.class, EstadoService.class, PaqueteAuditService.class})
+            MobileWebConfig.class, WebConfig.class, EstadoService.class, PaqueteAuditService.class,
+            AdminController.class, ApiExceptionHandler.class})
     static class Config {
         @Bean CurrentUser currentUser() { return new CurrentUser(new MockHttpSession()); }
     }
@@ -58,6 +61,7 @@ class MobileIntegrationTest {
     @Autowired BCryptPasswordEncoder encoder;
     @Autowired ObjectMapper json;
     @Autowired MobilePodService pods;
+    @Autowired jakarta.persistence.EntityManager em;
 
     @BeforeAll void migrate() throws Exception {
         MysqlPruebas.migrar(jdbc);
@@ -75,10 +79,79 @@ class MobileIntegrationTest {
     }
 
     String login(String username) throws Exception {
+        return login(username, "test-password");
+    }
+
+    String login(String username, String password) throws Exception {
         var response = mvc.perform(post("/api/mobile/v1/login").contentType("application/json")
-                .content(json.writeValueAsString(new MobileController.Login(username, "test-password"))))
+                .content(json.writeValueAsString(new MobileController.Login(username, password))))
                 .andExpect(status().isOk()).andReturn();
         return "Bearer " + json.readTree(response.getResponse().getContentAsString()).get("token").asText();
+    }
+
+    MockHttpSession adminSession() {
+        var session = new MockHttpSession();
+        session.setAttribute("AUTH_USER_ID", 99L);
+        session.setAttribute("AUTH_USER_ROLE", "ADMIN");
+        return session;
+    }
+
+    @Test @Transactional void createsCourierWithHashedPasswordAndMobileAccess() throws Exception {
+        var response = mvc.perform(post("/api/admin/mensajeros").session(adminSession()).contentType("application/json")
+                .content("{\"fullName\":\"Mensajero nuevo\",\"username\":\"Nuevo.User\",\"password\":\"clave-segura\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.user.username").value("nuevo.user"))
+                .andExpect(jsonPath("$.user.rol").value("MENSAJERO"))
+                .andExpect(jsonPath("$.user.password").doesNotExist()).andReturn();
+        long id = json.readTree(response.getResponse().getContentAsString()).path("user").path("id").asLong();
+        String hash = jdbc.queryForObject("SELECT password FROM usuarios WHERE id=?", String.class, id);
+        assertNotEquals("clave-segura", hash);
+        assertTrue(encoder.matches("clave-segura", hash));
+        String token = login("nuevo.user", "clave-segura");
+        mvc.perform(get("/api/mobile/v1/me").header("Authorization", token)).andExpect(status().isOk());
+    }
+
+    @Test @Transactional void assignsPasswordToLegacyCourierWithoutReplacingIdentityOrDeliveries() throws Exception {
+        jdbc.update("UPDATE usuarios SET rol='OPERADOR', role='TRANSPORTISTA LOCAL' WHERE id=1");
+        jdbc.update("UPDATE paquetes SET mensajero_id=1 WHERE id=1");
+        String token = login("mensajero1");
+        mvc.perform(post("/api/admin/mensajeros/1/password").session(adminSession()).contentType("application/json")
+                .content("{\"password\":\"clave-nueva\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.user.username").value("mensajero1"));
+        em.clear();
+        assertEquals(1L, jdbc.queryForObject("SELECT mensajero_id FROM paquetes WHERE id=1", Long.class));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM usuarios", Integer.class));
+        mvc.perform(get("/api/mobile/v1/me").header("Authorization", token)).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/mobile/v1/login").contentType("application/json")
+                .content("{\"username\":\"mensajero1\",\"password\":\"test-password\"}"))
+                .andExpect(status().isUnauthorized());
+        login("mensajero1", "clave-nueva");
+    }
+
+    @Test @Transactional void rejectsMissingCredentialsAndDuplicateUsernames() throws Exception {
+        mvc.perform(post("/api/admin/mensajeros").session(adminSession()).contentType("application/json")
+                .content("{\"fullName\":\"Sin clave\"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/admin/mensajeros").session(adminSession()).contentType("application/json")
+                .content("{\"fullName\":\"Otro\",\"username\":\"mensajero1\",\"password\":\"clave-segura\"}"))
+                .andExpect(status().isBadRequest());
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM usuarios", Integer.class));
+    }
+
+    @Test @Transactional void onlyAdminCanAssignPasswordAndOnlyToCouriers() throws Exception {
+        var request = post("/api/admin/mensajeros/1/password").contentType("application/json")
+                .content("{\"password\":\"clave-nueva\"}");
+        mvc.perform(request).andExpect(status().isUnauthorized());
+        var nonAdmin = new MockHttpSession();
+        nonAdmin.setAttribute("AUTH_USER_ID", 1L);
+        nonAdmin.setAttribute("AUTH_USER_ROLE", "TRANSPORTISTA");
+        mvc.perform(post("/api/admin/mensajeros/1/password").session(nonAdmin).contentType("application/json")
+                .content("{\"password\":\"clave-nueva\"}"))
+                .andExpect(status().isForbidden());
+        jdbc.update("UPDATE usuarios SET rol='OPERADOR',role='ADMIN' WHERE id=2");
+        mvc.perform(post("/api/admin/mensajeros/2/password").session(adminSession()).contentType("application/json")
+                .content("{\"password\":\"clave-nueva\"}"))
+                .andExpect(status().isBadRequest());
+        assertTrue(encoder.matches("test-password", jdbc.queryForObject("SELECT password FROM usuarios WHERE id=2", String.class)));
     }
 
     org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder pod(String operation, String version) {

@@ -10,8 +10,14 @@ export default function AdminProfile() {
     role: "USER",
   });
 
-  // ✅ Crear mensajero (solo nombre -> llama SP vía backend: POST /admin/mensajeros)
-  const [mForm, setMForm] = useState({ fullName: "" });
+  const [mForm, setMForm] = useState({ fullName: "", username: "", password: "" });
+  const [passwordUser, setPasswordUser] = useState(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const isCourier = (u) => u.role !== "ADMIN" && [u.rol, u.role].some((value) => {
+    const role = String(value ?? "").trim().toUpperCase();
+    return role === "MENSAJERO" || role.startsWith("TRANSPORTISTA");
+  });
 
   // ✅ Muebles / ubicaciones
   const [muebleForm, setMuebleForm] = useState({ mueble: "", estanterias: "" });
@@ -122,7 +128,6 @@ export default function AdminProfile() {
     }
   };
 
-  // ✅ Crear mensajero: solo nombre -> backend llama SP sp_crear_mensajero
   const normalizeNombre = (s) => (s ?? "").trim();
 
   const onCreateMensajero = async (e) => {
@@ -138,12 +143,34 @@ export default function AdminProfile() {
     }
 
     try {
-      await api.post("/admin/mensajeros", { fullName });
-      setMForm({ fullName: "" });
+      const { data } = await api.post("/admin/mensajeros", { fullName, username: mForm.username.trim(), password: mForm.password });
+      if (data?.ok === false) throw new Error(data.message || "No se pudo crear el mensajero");
+      setMForm({ fullName: "", username: "", password: "" });
       await loadUsers();
-      setMsg("Mensajero creado");
+      setMsg(`Mensajero creado. Usuario para la app: ${data.user.username}`);
     } catch (err) {
-      setMsg(err?.response?.data?.message || "Error creando mensajero");
+      setMsg(err?.response?.data?.message || err.message || "Error creando mensajero");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onSetCourierPassword = async (e) => {
+    e.preventDefault();
+    if (newPassword !== confirmPassword) {
+      setMsg("Las contraseñas no coinciden");
+      return;
+    }
+    setLoading(true);
+    setMsg("");
+    try {
+      await api.post(`/admin/mensajeros/${passwordUser.id}/password`, { password: newPassword });
+      setMsg(`Contraseña guardada para ${passwordUser.username}. Ya puede iniciar sesión en la app; sus sesiones móviles anteriores se cerraron.`);
+      setPasswordUser(null);
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err) {
+      setMsg(err?.response?.data?.message || "No se pudo guardar la contraseña");
     } finally {
       setLoading(false);
     }
@@ -363,7 +390,7 @@ export default function AdminProfile() {
           </button>
         </form>
 
-        {/* ✅ Opción: agregar mensajero (solo nombre) - llama SP vía backend */}
+        {/* Credenciales de acceso para mensajeros */}
         <form
           onSubmit={onCreateMensajero}
           style={{
@@ -377,11 +404,25 @@ export default function AdminProfile() {
             <label>Nombre completo</label>
             <input
               value={mForm.fullName}
-              onChange={(e) => setMForm({ fullName: e.target.value })}
+              onChange={(e) => setMForm({ ...mForm, fullName: e.target.value })}
               placeholder='Ej: "Andrés Salas"'
+              maxLength={150}
               required
             />
           </div>
+          <div>
+            <label htmlFor="courier-username">Usuario de acceso</label>
+            <input id="courier-username" value={mForm.username} autoComplete="off"
+              onChange={(e) => setMForm({ ...mForm, username: e.target.value.toLowerCase() })}
+              placeholder="Ej: andres.salas" minLength={3} maxLength={60} pattern="[a-z0-9._\-]{3,60}" required />
+          </div>
+          <div>
+            <label htmlFor="courier-password">Contraseña para la app</label>
+            <input id="courier-password" type="password" value={mForm.password} autoComplete="new-password"
+              onChange={(e) => setMForm({ ...mForm, password: e.target.value })}
+              minLength={8} maxLength={72} required />
+          </div>
+          <p>Use al menos 8 caracteres. Entregue al mensajero su usuario y contraseña para iniciar sesión.</p>
           <button disabled={loading} type="submit" style={{ marginTop: 10 }}>
             Crear mensajero
           </button>
@@ -501,6 +542,27 @@ export default function AdminProfile() {
 
       <section style={{ marginTop: 24 }}>
         <h2>Usuarios</h2>
+        {passwordUser && (
+          <form onSubmit={onSetCourierPassword} style={{ border: "1px solid #ccc", padding: 16, marginBottom: 16 }}>
+            <h3>Asignar contraseña a {passwordUser.full_name}</h3>
+            <p>Usuario para la app: <strong>{passwordUser.username}</strong></p>
+            <div>
+              <label htmlFor="courier-new-password">Nueva contraseña</label>
+              <input id="courier-new-password" type="password" autoComplete="new-password" value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)} minLength={8} maxLength={72} required />
+            </div>
+            <div>
+              <label htmlFor="courier-confirm-password">Repetir contraseña</label>
+              <input id="courier-confirm-password" type="password" autoComplete="new-password" value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)} minLength={8} maxLength={72} required />
+            </div>
+            <p>Se conservan sus entregas y su usuario. Deberá iniciar sesión nuevamente en el celular.</p>
+            <button type="submit" disabled={loading}>Guardar contraseña</button>
+            <button type="button" disabled={loading} onClick={() => {
+              setPasswordUser(null); setNewPassword(""); setConfirmPassword("");
+            }}>Cancelar</button>
+          </form>
+        )}
         <table width="100%" border="1" cellPadding="6" style={{ borderCollapse: "collapse" }}>
           <thead>
             <tr>
@@ -523,6 +585,9 @@ export default function AdminProfile() {
                 <td>{u.active ? "Sí" : "No"}</td>
                 <td>{u.created_at?.replace("T", " ").replace("Z", "")}</td>
                 <td>
+                  {isCourier(u) && <button disabled={loading} onClick={() => {
+                    setPasswordUser(u); setNewPassword(""); setConfirmPassword(""); setMsg("");
+                  }}>Asignar contraseña</button>}
                   <button onClick={() => onDeleteUser(u.username)} disabled={loading || u.role === "ADMIN"}>
                     Eliminar
                   </button>

@@ -68,10 +68,14 @@ public class MobileAuth {
     }
 
     private static void requireCourier(Usuario user) {
-        String role = user.getRol() == null ? "" : user.getRol().trim().toUpperCase(Locale.ROOT);
-        if (!Boolean.TRUE.equals(user.getActive()) || !("MENSAJERO".equals(role) || "TRANSPORTISTA".equals(role))) {
+        if (!Boolean.TRUE.equals(user.getActive()) || !(courierRole(user.getRol()) || courierRole(user.getRole()))) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Se requiere un usuario mensajero activo de esta sucursal");
         }
+    }
+
+    private static boolean courierRole(String value) {
+        String role = value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+        return "MENSAJERO".equals(role) || role.startsWith("TRANSPORTISTA");
     }
 
     public static String hash(String value) {

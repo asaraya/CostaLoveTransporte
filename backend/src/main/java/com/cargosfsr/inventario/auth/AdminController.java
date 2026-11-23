@@ -10,6 +10,8 @@ import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.util.StringUtils;
+import org.springframework.transaction.annotation.Transactional;
+import java.nio.charset.StandardCharsets;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -60,34 +62,50 @@ public class AdminController {
         return Map.of("ok", true, "username", username, "role", role);
     }
 
-    /**
-     * Crea un "mensajero/transportista" con solo el nombre.
-     * Requiere el SP: sp_crear_mensajero(IN p_full_name VARCHAR(150))
-     *
-     * POST /api/admin/mensajeros
-     * body: { "fullName": "Andrés Salas" }  (o { "nombre": "Andrés Salas" })
-     */
     @PostMapping("/mensajeros")
+    @Transactional
     public Map<String, Object> createMensajero(@RequestBody CreateMensajeroReq req) {
         String fullName = StringUtils.hasText(req.fullName) ? req.fullName.trim()
                         : (req.nombre == null ? null : req.nombre.trim());
-
+        String username = normUsername(req.username);
+        if (username == null || !username.matches("^[a-z0-9._-]{3,60}$")) {
+            throw new IllegalArgumentException("Usuario inválido: use de 3 a 60 letras, números, puntos, guiones o guiones bajos");
+        }
         if (!StringUtils.hasText(fullName) || fullName.length() > 150) {
             throw new IllegalArgumentException("Nombre inválido");
         }
-
+        validateCourierPassword(req.password);
         try {
-            // El SP debe: username auto + password NOLOGIN + role TRANSPORTISTA + rol MENSAJERO
-            Map<String, Object> row = jdbc.queryForMap("CALL sp_crear_mensajero(?)", fullName);
+            Map<String, Object> row = jdbc.queryForMap("CALL sp_th_mensajero_crear_acceso(?,?,?)",
+                    username, fullName, bcrypt.encode(req.password));
             return Map.of("ok", true, "user", row);
-
         } catch (DuplicateKeyException dk) {
-            // En teoría el SP resuelve colisiones con sufijos; esto cubriría casos raros de concurrencia.
-            return Map.of("ok", false, "message", "No se pudo crear: username duplicado");
-        } catch (DataAccessException ex) {
-            // Captura SIGNAL SQLSTATE '45000' del SP y otros errores JDBC
-            String msg = (ex.getMostSpecificCause() != null) ? ex.getMostSpecificCause().getMessage() : ex.getMessage();
-            throw new IllegalArgumentException(msg);
+            throw new IllegalArgumentException("Ese usuario ya existe. Elija otro o asigne contraseña al mensajero existente");
+        }
+    }
+
+    @PostMapping("/mensajeros/{id}/password")
+    @Transactional
+    public Map<String, Object> setMensajeroPassword(@PathVariable Long id, @RequestBody CourierPasswordReq req) {
+        if (id == null || id <= 0) throw new IllegalArgumentException("Mensajero inválido");
+        validateCourierPassword(req.password);
+        try {
+            var row = jdbc.queryForMap("CALL sp_th_mensajero_asignar_clave(?,?)", id, bcrypt.encode(req.password));
+            return Map.of("ok", true, "user", row);
+        } catch (DataAccessException error) {
+            if (error.getMostSpecificCause() instanceof java.sql.SQLException sql && "45000".equals(sql.getSQLState())) {
+                throw new IllegalArgumentException("Seleccione un mensajero existente");
+            }
+            throw error;
+        }
+    }
+
+    private static void validateCourierPassword(String password) {
+        if (!StringUtils.hasText(password) || password.length() < 8) {
+            throw new IllegalArgumentException("La contraseña debe tener al menos 8 caracteres");
+        }
+        if (password.getBytes(StandardCharsets.UTF_8).length > 72) {
+            throw new IllegalArgumentException("La contraseña supera el máximo de 72 bytes; use una más corta");
         }
     }
 
@@ -302,8 +320,14 @@ public class AdminController {
     }
 
     public static class CreateMensajeroReq {
+        public String username;
+        public String password;
         public String fullName; // recomendado
         public String nombre;   // opcional (por compatibilidad con front)
+    }
+
+    public static class CourierPasswordReq {
+        public String password;
     }
 
     public static class AddDistritoReq {
