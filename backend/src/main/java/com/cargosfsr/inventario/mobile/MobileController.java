@@ -22,6 +22,12 @@ public class MobileController {
     public MobileController(MobileAuth auth, MobilePodService pods) { this.auth = auth; this.pods = pods; }
 
     public record Login(String username, String password) {}
+    public record Attempt(String operationId, String tracking, Instant capturedAt, String version) {}
+
+    @PostMapping("/attempts")
+    public Map<String, Object> attempt(@RequestAttribute("mobileUser") Usuario user, @RequestBody Attempt request) {
+        return pods.attempt(user, request.operationId(), request.tracking(), request.capturedAt(), request.version());
+    }
 
     @PostMapping("/login")
     public Map<String, Object> login(@RequestBody Login request) {

@@ -76,6 +76,9 @@ class MobileIntegrationTest {
         var singlePhoto = java.nio.file.Path.of("../database/pod_foto_unica.sql");
         MysqlPruebas.ejecutarScript(jdbc, singlePhoto);
         MysqlPruebas.ejecutarScript(jdbc, singlePhoto);
+        var attempts = java.nio.file.Path.of("../database/intentos_movil.sql");
+        MysqlPruebas.ejecutarScript(jdbc, attempts);
+        MysqlPruebas.ejecutarScript(jdbc, attempts);
         MysqlPruebas.ejecutarScript(jdbc, java.nio.file.Path.of("src/test/resources/legacy_conteos.sql"));
     }
 
@@ -235,5 +238,54 @@ class MobileIntegrationTest {
         assertEquals("ENTREGADO_A_TRANSPORTISTA_LOCAL", jdbc.queryForObject("SELECT estado FROM paquetes WHERE id=1", String.class));
         mvc.perform(post("/api/mobile/v1/logout").header("Authorization", token)).andExpect(status().isOk());
         mvc.perform(get("/api/mobile/v1/packages/LM123").header("Authorization", token)).andExpect(status().isUnauthorized());
+    }
+
+    @Test @Transactional void attemptsProgressOncePerOperationWithoutRecordingDelivery() throws Exception {
+        jdbc.update("UPDATE paquetes SET estado='NO_ENTREGADO_CONSIGNATARIO_DISPONIBLE' WHERE id=1");
+        em.clear();
+        String token = login("mensajero1");
+        String secondToken = login("mensajero2");
+        String[] expected = {"ENTREGADO_A_TRANSPORTISTA_LOCAL", "ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO"};
+        for (int index = 0; index < 2; index++) {
+            String version = pods.lookup("LM123").get("version").toString();
+            String body = json.writeValueAsString(new MobileController.Attempt(UUID.randomUUID().toString(), "LM123",
+                    Instant.parse(index == 0 ? "2026-11-12T17:47:00Z" : "2026-11-13T17:47:00Z"), version));
+            for (int retry = 0; retry < 2; retry++) {
+                mvc.perform(post("/api/mobile/v1/attempts").header("Authorization", token)
+                        .contentType("application/json").content(body)).andExpect(status().isOk())
+                        .andExpect(jsonPath("$.state").value(expected[index]))
+                        .andExpect(jsonPath("$.version").value(pods.lookup("LM123").get("version").toString()));
+            }
+            mvc.perform(post("/api/mobile/v1/attempts").header("Authorization", secondToken)
+                    .contentType("application/json").content(body)).andExpect(status().isConflict());
+        }
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM mobile_attempts", Integer.class));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM paquete_estado_historial", Integer.class));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM paquete_audit_log WHERE modulo_origen='APLICACION_MOVIL' AND usuario='mensajero1'", Integer.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM mobile_pods", Integer.class));
+        assertNull(jdbc.queryForObject("SELECT delivered_at FROM paquetes WHERE id=1", java.sql.Timestamp.class));
+        assertEquals(courier1, jdbc.queryForObject("SELECT MIN(usuario_id) FROM mobile_attempts", Long.class));
+        String third = json.writeValueAsString(new MobileController.Attempt(UUID.randomUUID().toString(), "LM123",
+                Instant.parse("2026-11-14T17:47:00Z"), pods.lookup("LM123").get("version").toString()));
+        mvc.perform(post("/api/mobile/v1/attempts").header("Authorization", token)
+                .contentType("application/json").content(third)).andExpect(status().isConflict());
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM mobile_attempts", Integer.class));
+    }
+
+    @Test @Transactional void attemptRequiresSessionAndRejectsStaleOrDeliveredPackages() throws Exception {
+        String body = json.writeValueAsString(new MobileController.Attempt(UUID.randomUUID().toString(), "LM123",
+                Instant.parse("2026-11-12T17:47:00Z"), "stale"));
+        mvc.perform(post("/api/mobile/v1/attempts").contentType("application/json").content(body))
+                .andExpect(status().isUnauthorized());
+        String token = login("mensajero1");
+        mvc.perform(post("/api/mobile/v1/attempts").header("Authorization", token)
+                .contentType("application/json").content(body)).andExpect(status().isConflict());
+        jdbc.update("UPDATE paquetes SET estado='PRUEBA_DE_ENTREGA', mensajero_id=?, delivered_at='2026-11-12 11:47:00' WHERE id=1", courier1);
+        em.clear();
+        body = json.writeValueAsString(new MobileController.Attempt(UUID.randomUUID().toString(), "LM123",
+                Instant.parse("2026-11-12T17:47:00Z"), pods.lookup("LM123").get("version").toString()));
+        mvc.perform(post("/api/mobile/v1/attempts").header("Authorization", token)
+                .contentType("application/json").content(body)).andExpect(status().isConflict());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM mobile_attempts", Integer.class));
     }
 }

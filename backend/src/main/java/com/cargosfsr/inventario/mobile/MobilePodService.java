@@ -38,6 +38,40 @@ public class MobilePodService {
     }
 
     @Transactional
+    public Map<String, Object> attempt(Usuario user, String operationId, String tracking, Instant capturedAt, String version) {
+        UUID.fromString(operationId);
+        String normalized = normalize(tracking);
+        if (capturedAt == null || capturedAt.isAfter(Instant.now().plusSeconds(300)))
+            throw new IllegalArgumentException("Revise la fecha y hora del teléfono");
+        String fingerprint = MobileAuth.hash(normalized + "\n" + capturedAt + "\n" + version);
+        var paquete = paquetes.findByTrackingCodeForUpdate(normalized).orElseThrow(
+                () -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracking no encontrado"));
+        var previous = jdbc.queryForList("CALL sp_th_mobile_attempt_operation(?)", operationId);
+        if (!previous.isEmpty()) {
+            var operation = previous.get(0);
+            if (((Number) operation.get("usuario_id")).longValue() != user.getId()
+                    || !fingerprint.equals(operation.get("request_hash")))
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "El identificador pertenece a otro intento");
+            return Map.of("operationId", operationId, "tracking", normalized,
+                    "state", operation.get("result_state"), "version", operation.get("result_version"));
+        }
+        var current = lookup(normalized);
+        if (!java.util.Objects.equals(current.get("version"), version))
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "El paquete cambió en el sistema. Consulte la oficina antes de registrar el intento.");
+        if (paquete.getEstado() == PaqueteEstado.PRUEBA_DE_ENTREGA || paquete.getEstado() == PaqueteEstado.NO_ENTREGABLE
+                || paquete.getEstado() == PaqueteEstado.ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO)
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "El paquete ya tiene segundo intento o un estado final.");
+        PaqueteEstado next = paquete.getEstado() == PaqueteEstado.ENTREGADO_A_TRANSPORTISTA_LOCAL
+                ? PaqueteEstado.ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO : PaqueteEstado.ENTREGADO_A_TRANSPORTISTA_LOCAL;
+        estados.intentoDesdeMovil(normalized, next, capturedAt, user);
+        String resultVersion = lookup(normalized).get("version").toString();
+        jdbc.update("CALL sp_th_mobile_attempt_create(?, ?, ?, ?, ?, ?, ?, ?)", operationId, paquete.getId(),
+                user.getId(), fingerprint, next.name(), resultVersion,
+                LocalDateTime.ofInstant(capturedAt, ZoneOffset.UTC).toString(), normalized);
+        return Map.of("operationId", operationId, "tracking", normalized, "state", next.name(), "version", resultVersion);
+    }
+
+    @Transactional
     public Map<String, Object> deliver(Usuario user, String operationId, String tracking,
             Instant capturedAt, String version, MultipartFile parcel, MultipartFile recipient) throws IOException {
         return deliverPhotos(user, operationId, tracking, capturedAt, version, photo(parcel), photo(recipient));

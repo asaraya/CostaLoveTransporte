@@ -163,6 +163,16 @@ public class EstadoService {
                 null, usuario.getId(), "APLICACION_MOVIL");
     }
 
+    @Transactional
+    @CacheEvict(cacheNames = { "inventario", "busquedas" }, allEntries = true)
+    public Map<String, Object> intentoDesdeMovil(String tracking, PaqueteEstado estado, Instant when, Usuario usuario) {
+        if (estado != PaqueteEstado.ENTREGADO_A_TRANSPORTISTA_LOCAL
+                && estado != PaqueteEstado.ENTREGADO_A_TRANSPORTISTA_LOCAL_2DO_INTENTO)
+            throw new IllegalArgumentException("Estado de intento inválido");
+        return actualizarEstado(tracking, estado, "Visita fallida desde aplicación móvil", usuario.getUsername(),
+                false, when, null, null, "APLICACION_MOVIL");
+    }
+
     private Map<String, Object> actualizarEstado(String tracking, PaqueteEstado nuevo,
             String motivo, String changedByIgnored, boolean force, Instant when,
             String devolucionSubtipoOpt, Long mensajeroId, String moduloOrigen) {
