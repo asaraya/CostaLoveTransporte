@@ -62,16 +62,28 @@ class MobileIntegrationTest {
     @Autowired ObjectMapper json;
     @Autowired MobilePodService pods;
     @Autowired jakarta.persistence.EntityManager em;
+    private Long courier1;
+    private Long courier2;
 
     @BeforeAll void migrate() throws Exception {
         MysqlPruebas.migrar(jdbc);
         MysqlPruebas.migrar(jdbc);
+        var access = java.nio.file.Path.of("../database/acceso_mensajeros.sql");
+        MysqlPruebas.ejecutarScript(jdbc, access);
+        var original = jdbc.queryForMap("SELECT id, password, rol, role, active FROM usuarios WHERE username='prueba'");
+        MysqlPruebas.ejecutarScript(jdbc, access);
+        assertEquals(original, jdbc.queryForMap("SELECT id, password, rol, role, active FROM usuarios WHERE username='prueba'"));
+        var singlePhoto = java.nio.file.Path.of("../database/pod_foto_unica.sql");
+        MysqlPruebas.ejecutarScript(jdbc, singlePhoto);
+        MysqlPruebas.ejecutarScript(jdbc, singlePhoto);
         MysqlPruebas.ejecutarScript(jdbc, java.nio.file.Path.of("src/test/resources/legacy_conteos.sql"));
     }
 
     @BeforeEach void fixture() {
-        jdbc.update("INSERT INTO usuarios(id,username,full_name,password,rol) VALUES(1,'mensajero1','Ana',?,'MENSAJERO'),(2,'mensajero2','Luis',?,'MENSAJERO')",
+        jdbc.update("INSERT INTO usuarios(username,full_name,password,rol) VALUES('mensajero1','Ana',?,'MENSAJERO'),('mensajero2','Luis',?,'MENSAJERO')",
                 encoder.encode("test-password"), encoder.encode("test-password"));
+        courier1 = jdbc.queryForObject("SELECT id FROM usuarios WHERE username='mensajero1'", Long.class);
+        courier2 = jdbc.queryForObject("SELECT id FROM usuarios WHERE username='mensajero2'", Long.class);
         jdbc.update("INSERT INTO sacos(id,marchamo) VALUES(1,'PRUEBA')");
         jdbc.update("INSERT INTO distritos(id,nombre) VALUES(1,'PRUEBA')");
         jdbc.update("INSERT INTO ubicacion(id,tipo,codigo) VALUES(1,'MUEBLE','PRUEBA')");
@@ -96,6 +108,16 @@ class MobileIntegrationTest {
         return session;
     }
 
+    @Test @Transactional void scriptCreatesSingleTrialCourierWithRequestedPassword() throws Exception {
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM usuarios WHERE username='prueba'", Integer.class));
+        String hash = jdbc.queryForObject("SELECT password FROM usuarios WHERE username='prueba'", String.class);
+        assertNotEquals("12345", hash);
+        assertTrue(encoder.matches("12345", hash));
+        String token = login("prueba", "12345");
+        mvc.perform(get("/api/mobile/v1/me").header("Authorization", token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.username").value("prueba"));
+    }
+
     @Test @Transactional void createsCourierWithHashedPasswordAndMobileAccess() throws Exception {
         var response = mvc.perform(post("/api/admin/mensajeros").session(adminSession()).contentType("application/json")
                 .content("{\"fullName\":\"Mensajero nuevo\",\"username\":\"Nuevo.User\",\"password\":\"clave-segura\"}"))
@@ -111,15 +133,15 @@ class MobileIntegrationTest {
     }
 
     @Test @Transactional void assignsPasswordToLegacyCourierWithoutReplacingIdentityOrDeliveries() throws Exception {
-        jdbc.update("UPDATE usuarios SET rol='OPERADOR', role='TRANSPORTISTA LOCAL' WHERE id=1");
-        jdbc.update("UPDATE paquetes SET mensajero_id=1 WHERE id=1");
+        jdbc.update("UPDATE usuarios SET rol='OPERADOR', role='TRANSPORTISTA LOCAL' WHERE id=?", courier1);
+        jdbc.update("UPDATE paquetes SET mensajero_id=? WHERE id=1", courier1);
         String token = login("mensajero1");
-        mvc.perform(post("/api/admin/mensajeros/1/password").session(adminSession()).contentType("application/json")
+        mvc.perform(post("/api/admin/mensajeros/{id}/password", courier1).session(adminSession()).contentType("application/json")
                 .content("{\"password\":\"clave-nueva\"}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.user.username").value("mensajero1"));
         em.clear();
-        assertEquals(1L, jdbc.queryForObject("SELECT mensajero_id FROM paquetes WHERE id=1", Long.class));
-        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM usuarios", Integer.class));
+        assertEquals(courier1, jdbc.queryForObject("SELECT mensajero_id FROM paquetes WHERE id=1", Long.class));
+        assertEquals(3, jdbc.queryForObject("SELECT COUNT(*) FROM usuarios", Integer.class));
         mvc.perform(get("/api/mobile/v1/me").header("Authorization", token)).andExpect(status().isUnauthorized());
         mvc.perform(post("/api/mobile/v1/login").contentType("application/json")
                 .content("{\"username\":\"mensajero1\",\"password\":\"test-password\"}"))
@@ -134,24 +156,24 @@ class MobileIntegrationTest {
         mvc.perform(post("/api/admin/mensajeros").session(adminSession()).contentType("application/json")
                 .content("{\"fullName\":\"Otro\",\"username\":\"mensajero1\",\"password\":\"clave-segura\"}"))
                 .andExpect(status().isBadRequest());
-        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM usuarios", Integer.class));
+        assertEquals(3, jdbc.queryForObject("SELECT COUNT(*) FROM usuarios", Integer.class));
     }
 
     @Test @Transactional void onlyAdminCanAssignPasswordAndOnlyToCouriers() throws Exception {
-        var request = post("/api/admin/mensajeros/1/password").contentType("application/json")
+        var request = post("/api/admin/mensajeros/{id}/password", courier1).contentType("application/json")
                 .content("{\"password\":\"clave-nueva\"}");
         mvc.perform(request).andExpect(status().isUnauthorized());
         var nonAdmin = new MockHttpSession();
-        nonAdmin.setAttribute("AUTH_USER_ID", 1L);
+        nonAdmin.setAttribute("AUTH_USER_ID", courier1);
         nonAdmin.setAttribute("AUTH_USER_ROLE", "TRANSPORTISTA");
-        mvc.perform(post("/api/admin/mensajeros/1/password").session(nonAdmin).contentType("application/json")
+        mvc.perform(post("/api/admin/mensajeros/{id}/password", courier1).session(nonAdmin).contentType("application/json")
                 .content("{\"password\":\"clave-nueva\"}"))
                 .andExpect(status().isForbidden());
-        jdbc.update("UPDATE usuarios SET rol='OPERADOR',role='ADMIN' WHERE id=2");
-        mvc.perform(post("/api/admin/mensajeros/2/password").session(adminSession()).contentType("application/json")
+        jdbc.update("UPDATE usuarios SET rol='OPERADOR',role='ADMIN' WHERE id=?", courier2);
+        mvc.perform(post("/api/admin/mensajeros/{id}/password", courier2).session(adminSession()).contentType("application/json")
                 .content("{\"password\":\"clave-nueva\"}"))
                 .andExpect(status().isBadRequest());
-        assertTrue(encoder.matches("test-password", jdbc.queryForObject("SELECT password FROM usuarios WHERE id=2", String.class)));
+        assertTrue(encoder.matches("test-password", jdbc.queryForObject("SELECT password FROM usuarios WHERE id=?", String.class, courier2)));
     }
 
     org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder pod(String operation, String version) {
@@ -163,14 +185,35 @@ class MobileIntegrationTest {
                 .param("capturedAt", "2026-11-12T17:47:00Z").param("version", version);
     }
 
+    @Test @Transactional void singlePhotoPodUpdatesDeliveryOnceAndStoresNoDuplicatePhoto() throws Exception {
+        String token = login("mensajero1");
+        String version = pods.lookup("LM123").get("version").toString();
+        String operation = UUID.randomUUID().toString();
+        byte[] jpeg = {(byte) 0xff, (byte) 0xd8, (byte) 0xff, 4, 5, 6};
+        for (int attempt = 0; attempt < 2; attempt++) {
+            mvc.perform(multipart("/api/mobile/v1/pods")
+                    .file(new MockMultipartFile("proof", "pod.jpg", "image/jpeg", jpeg))
+                    .param("operationId", operation).param("tracking", "LM123")
+                    .param("capturedAt", "2026-11-12T17:47:00Z").param("version", version)
+                    .header("Authorization", token))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("CONFIRMED"));
+        }
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM mobile_pods", Integer.class));
+        assertArrayEquals(jpeg, jdbc.queryForObject("SELECT parcel_photo FROM mobile_pods", byte[].class));
+        assertNull(jdbc.queryForObject("SELECT recipient_photo FROM mobile_pods", byte[].class));
+        assertEquals(courier1, jdbc.queryForObject("SELECT mensajero_id FROM paquetes WHERE id=1", Long.class));
+        assertEquals("PRUEBA_DE_ENTREGA", jdbc.queryForObject("SELECT estado FROM paquetes WHERE id=1", String.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM paquete_estado_historial", Integer.class));
+    }
+
     @Test @Transactional void deliveryUsesAuthenticatedUserAndRetriesDoNotDuplicate() throws Exception {
         String token = login("mensajero1");
         String version = pods.lookup("LM123").get("version").toString();
         String id = UUID.randomUUID().toString();
-        mvc.perform(pod(id, version).header("Authorization", token).param("usuarioId", "2"))
+        mvc.perform(pod(id, version).header("Authorization", token).param("usuarioId", courier2.toString()))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("CONFIRMED"));
         mvc.perform(pod(id, version).header("Authorization", token)).andExpect(status().isOk());
-        assertEquals(1L, jdbc.queryForObject("SELECT mensajero_id FROM paquetes WHERE id=1", Long.class));
+        assertEquals(courier1, jdbc.queryForObject("SELECT mensajero_id FROM paquetes WHERE id=1", Long.class));
         assertEquals("PRUEBA_DE_ENTREGA", jdbc.queryForObject("SELECT estado FROM paquetes WHERE id=1", String.class));
         assertEquals("2026-11-12 11:47:00", jdbc.queryForObject("SELECT DATE_FORMAT(delivered_at,'%Y-%m-%d %H:%i:%s') FROM paquetes WHERE id=1", String.class));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM mobile_pods", Integer.class));

@@ -40,15 +40,24 @@ public class MobilePodService {
     @Transactional
     public Map<String, Object> deliver(Usuario user, String operationId, String tracking,
             Instant capturedAt, String version, MultipartFile parcel, MultipartFile recipient) throws IOException {
+        return deliverPhotos(user, operationId, tracking, capturedAt, version, photo(parcel), photo(recipient));
+    }
+
+    @Transactional
+    public Map<String, Object> deliverSingle(Usuario user, String operationId, String tracking,
+            Instant capturedAt, String version, MultipartFile proof) throws IOException {
+        return deliverPhotos(user, operationId, tracking, capturedAt, version, photo(proof), null);
+    }
+
+    private Map<String, Object> deliverPhotos(Usuario user, String operationId, String tracking,
+            Instant capturedAt, String version, byte[] parcelBytes, byte[] recipientBytes) {
         UUID.fromString(operationId);
         String normalized = normalize(tracking);
         if (capturedAt == null || capturedAt.isAfter(Instant.now().plusSeconds(300))) {
             throw new IllegalArgumentException("Revise la fecha y hora del teléfono");
         }
-        byte[] parcelBytes = photo(parcel);
-        byte[] recipientBytes = photo(recipient);
         String fingerprint = MobileAuth.hash(normalized + "\n" + capturedAt + "\n" + version + "\n"
-                + MobileAuth.hash(parcelBytes) + "\n" + MobileAuth.hash(recipientBytes));
+                + MobileAuth.hash(parcelBytes) + "\n" + (recipientBytes == null ? "SINGLE" : MobileAuth.hash(recipientBytes)));
 
         // El bloqueo del paquete serializa entregas concurrentes desde móvil y web.
         var paquete = paquetes.findByTrackingCodeForUpdate(normalized).orElseThrow(

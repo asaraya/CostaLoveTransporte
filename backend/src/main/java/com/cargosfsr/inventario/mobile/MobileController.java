@@ -44,7 +44,13 @@ public class MobileController {
     public Map<String, Object> deliver(@RequestAttribute("mobileUser") Usuario user,
             @RequestParam String operationId, @RequestParam String tracking,
             @RequestParam Instant capturedAt, @RequestParam String version,
-            @RequestPart MultipartFile parcel, @RequestPart MultipartFile recipient) throws IOException {
+            @RequestPart(required = false) MultipartFile parcel,
+            @RequestPart(required = false) MultipartFile recipient,
+            @RequestPart(required = false) MultipartFile proof) throws IOException {
+        if (proof != null) {
+            if (parcel != null || recipient != null) throw new IllegalArgumentException("Envíe una sola foto del POD");
+            return pods.deliverSingle(user, operationId, tracking, capturedAt, version, proof);
+        }
         return pods.deliver(user, operationId, tracking, capturedAt, version, parcel, recipient);
     }
 
